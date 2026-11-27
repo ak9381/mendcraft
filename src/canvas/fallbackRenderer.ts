@@ -819,7 +819,7 @@ export function renderNodeToDom(
   if (node.component === 'PlanBoard') {
     const el = doc.createElement('div');
     el.className = 'mc-fb-tile plan-board';
-    el.textContent = `Floor plan: ${String(p.template || 'studio')}`;
+    el.textContent = 'Floor plan';
     return el;
   }
 

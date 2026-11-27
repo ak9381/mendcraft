@@ -162,6 +162,7 @@ export function createPlanController(): ModeController {
 
   function expandTemplate(name: string): StepResult {
     if (!isPlanTemplateName(name)) return { ok: false, error: `Unknown plan "${name}".`, warnings: [] };
+    // `blank` is the only template: an empty drawing.
     const ops: PlanOp[] = [];
     for (const env of buildPlanTemplate(name)) {
       const v = validatePlanOp(env);
@@ -169,7 +170,7 @@ export function createPlanController(): ModeController {
     }
     const applied = engine.applyGenerated(ops);
     if (!applied.ok) return { ok: false, error: applied.error, warnings: [] };
-    return { ok: true, message: 'Plan created.', warnings: applied.warnings };
+    return { ok: true, message: 'Plan cleared.', warnings: applied.warnings };
   }
 
   return controller;

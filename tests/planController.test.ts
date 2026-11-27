@@ -2,23 +2,26 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createPlanController } from '../src/plan/controller';
 import { parsePlanCommand } from '../src/plan/ruleParser';
 import { setModelsForTest } from '../src/ai/hybrid';
+import { twoBedroomOps } from './helpers/planSamples';
 import { roomArea, roomPolygon, planBounds, wallLength, type PlanDoc } from '../src/plan/doc';
 
-// The controller's generate() routes through hybrid; with no Firebase key it
-// falls back to the deterministic rules path (no network), which is exactly the
-// frozen demo contract: "two bedroom plan" must work with no AI.
+// A whole plan is never built from a template in the code: with no model,
+// "two bedroom plan" draws nothing and says so. A plan the model wrote (here a
+// test sample, applied as generated ops) is then edited by the rules.
 afterEach(() => setModelsForTest(null));
 
 describe('plan controller — frozen demo path', () => {
-  it('generates a two-bedroom plan from rules, then edits the shared wall', async () => {
+  it('with no model a whole plan draws nothing; a generated plan is then edited on its shared wall', async () => {
     setModelsForTest({ enabled: false });
     const c = createPlanController();
 
     expect(c.isDesignRequest('two bedroom plan')).toBe(true);
     const gen = await c.generate('two bedroom plan');
     expect(gen.source).toBe('rules');
-    expect(gen.step.ok).toBe(true);
-    // The shared wall is pre-selected + dimensioned (see plan/templates).
+    expect(gen.step.ok).toBe(false);
+    expect((c.snapshot() as PlanDoc).walls).toHaveLength(0);
+    expect(c.applyGenerated!({ ops: twoBedroomOps() }).ok).toBe(true);
+    // The shared wall is pre-selected + dimensioned (expandPlanDocument).
     expect(c.selectedId()).toBe('w3');
     const doc0 = c.snapshot() as PlanDoc;
     expect(doc0.rooms).toHaveLength(5); // believable flat: 2 beds + living + kitchen + bath
@@ -40,7 +43,7 @@ describe('plan controller — frozen demo path', () => {
   it('stretching the shared wall to 4 m is a believable edit (both bedrooms grow, no stale geometry)', async () => {
     setModelsForTest({ enabled: false });
     const c = createPlanController();
-    await c.generate('two bedroom plan');
+    c.applyGenerated!({ ops: twoBedroomOps() });
 
     const doc0 = c.snapshot() as PlanDoc;
     const beds0 = doc0.rooms.filter((r) => /bedroom/i.test(r.name));
@@ -76,7 +79,7 @@ describe('plan controller — frozen demo path', () => {
   it('lists rooms and walls for the accessible panel', async () => {
     setModelsForTest({ enabled: false });
     const c = createPlanController();
-    await c.generate('two bedroom plan');
+    c.applyGenerated!({ ops: twoBedroomOps() });
     const items = c.listItems();
     expect(items.some((i) => i.label.includes('Bedroom 1'))).toBe(true);
     expect(items.some((i) => i.label.startsWith('Wall w3'))).toBe(true);

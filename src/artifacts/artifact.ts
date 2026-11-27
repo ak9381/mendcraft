@@ -113,6 +113,13 @@ function coercePlanData(data: Record<string, unknown>): Coerced<PlanData> {
   if (typeof data.boardId !== 'string' || !data.boardId || data.boardId.length > 80) return bad('the plan names no plan tile');
   const doc = sanitizePlanDoc(data.doc);
   if (!doc) return bad('the drawing failed its check');
+  // A stored drawing is all or nothing: one element that fails its check (a
+  // wall with no end point) means it is not the drawing she approved.
+  const raw = data.doc as Record<string, unknown>;
+  for (const k of ['walls', 'openings', 'rooms', 'dims', 'fixtures', 'texts'] as const) {
+    const had = Array.isArray(raw[k]) ? (raw[k] as unknown[]).length : 0;
+    if (had !== (doc[k] as unknown[]).length) return bad(`an element of the drawing failed its check (${k})`);
+  }
   return { ok: true, value: { frameId: data.frameId, boardId: data.boardId, doc } };
 }
 

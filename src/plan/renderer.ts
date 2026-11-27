@@ -40,6 +40,7 @@ import {
   type Wall,
 } from './doc';
 import { GRID_MM } from './snap';
+import { roomLabelLayout } from './roomLabels';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const WALL_HEIGHT_MM = 2500;
@@ -175,6 +176,8 @@ export function createPlanRenderer(
     bump(cover('.mc-props.is-expanded'));
     bump(cover('.mc-trash'));
     // Floor so docks never leave a sliver even if query fails mid-layout.
+    // The phone shell has no docks over the board: fit the plan to the board.
+    if (container.closest('.mc-phone-simple')) return { left, top, right, bottom };
     top = Math.max(top, 72);
     bottom = Math.max(bottom, 148);
     return { left, top, right, bottom };
@@ -465,8 +468,15 @@ export function createPlanRenderer(
       const c = roomCentroid(room, d);
       if (c) {
         const sc = toScreen(c);
-        svg.appendChild(textNode(sc.x, sc.y - 4, room.name, 14, '#334155', 'middle'));
-        svg.appendChild(textNode(sc.x, sc.y + 14, mm2ToM2Label(roomArea(room, d)), 12, '#64748b', 'middle'));
+        // Sized to the room on screen: a small room gets a smaller name and
+        // no area line, so neighbours' labels never run together.
+        const sp = pts.length >= 3 ? pts.map(toScreen) : [];
+        const bw = sp.length ? Math.max(...sp.map((p) => p.x)) - Math.min(...sp.map((p) => p.x)) : Infinity;
+        const bh = sp.length ? Math.max(...sp.map((p) => p.y)) - Math.min(...sp.map((p) => p.y)) : Infinity;
+        const area = mm2ToM2Label(roomArea(room, d));
+        const L = roomLabelLayout(room.name, area, bw, bh);
+        if (L.showName) svg.appendChild(textNode(sc.x, sc.y + L.nameDy, room.name, L.nameSize, '#334155', 'middle'));
+        if (L.showArea) svg.appendChild(textNode(sc.x, sc.y + L.areaDy, area, L.areaSize, '#64748b', 'middle'));
       }
     }
 

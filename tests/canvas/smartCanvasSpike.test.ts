@@ -6,7 +6,7 @@ import { CATALOG_SCHEMAS, DeviceTileApi, PlanBoardApi } from '../../src/canvas/c
 import { createSurfaceProposal } from '../../src/canvas/proposalBuffer';
 import { createDeviceStore } from '../../src/canvas/deviceActions';
 
-const draft = { kind: 'room', title: 'Studio', tiles: [{ type: 'lamp', deviceId: 'wiz-1', label: 'Desk lamp' }, { type: 'plan', boardId: 'plan-1', template: 'studio' }] };
+const draft = { kind: 'room', title: 'Studio', tiles: [{ type: 'lamp', deviceId: 'wiz-1', label: 'Desk lamp' }, { type: 'plan', boardId: 'plan-1', template: 'blank' }] };
 
 describe('surface plan', () => {
   it('coerces a valid draft', () => {
@@ -65,7 +65,7 @@ describe('gate', () => {
     expect(!r.ok && r.errors[0]).toMatch(/unknown component "EvilScript"/);
   });
   it('rejects extra props, foreign catalogs and unknown message kinds', () => {
-    const extra = [{ version: 'v0.9', updateComponents: { surfaceId: 's1', components: [{ id: 'p', component: 'PlanBoard', boardId: 'p1', template: 'studio', onload: 'x' }] } }];
+    const extra = [{ version: 'v0.9', updateComponents: { surfaceId: 's1', components: [{ id: 'p', component: 'PlanBoard', boardId: 'p1', template: 'blank', onload: 'x' }] } }];
     expect(gateMessages(extra, CATALOG_SCHEMAS).ok).toBe(false);
     expect(gateMessages([{ version: 'v0.9', createSurface: { surfaceId: 's', catalogId: 'https://evil.example/c.json' } }], CATALOG_SCHEMAS).ok).toBe(false);
     expect(gateMessages([{ version: 'v0.9', runScript: { surfaceId: 's' } }], CATALOG_SCHEMAS).ok).toBe(false);

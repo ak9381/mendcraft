@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PlanEngine } from '../src/plan/engine';
 import { validatePlanOp, type PlanOp } from '../src/plan/ops';
-import { buildPlanTemplate } from '../src/plan/templates';
+import { twoBedroomOps } from './helpers/planSamples';
 import { toDxf, toJson, DXF_LAYERS } from '../src/plan/export';
 
 function validated(env: Record<string, unknown>): PlanOp {
@@ -12,7 +12,7 @@ function validated(env: Record<string, unknown>): PlanOp {
 
 function buildTwoBedroom(): PlanEngine {
   const e = new PlanEngine();
-  e.applyGenerated(buildPlanTemplate('twoBedroom').map(validated));
+  e.applyGenerated(twoBedroomOps().map(validated));
   // Add a door + window so OPENINGS entities appear.
   e.apply(validated({ op: 'add_door', target: 'w2' }));
   e.apply(validated({ op: 'add_window', target: 'w4' }));

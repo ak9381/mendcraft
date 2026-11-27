@@ -591,6 +591,67 @@ async function connector(page) {
 }
 SECTIONS.connector = connector;
 
+// ---- floorplan: a generated floor plan opens on its own board; a voice edit; both back after a reload ----
+const planDrawing = () => {
+  const d = window.__mcCanvas.snapshot().drawings ?? {};
+  const f = window.__mcCanvas.frames().find((x) => x.kind === 'plan');
+  const doc = f ? Object.values(d[f.id] ?? {})[0] : null;
+  return doc ? { frame: f.id, rooms: doc.rooms.map((r) => r.name), walls: doc.walls.length } : null;
+};
+const planArtifacts = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'plan' || a.kind === 'board').map((a) => ({ id: a.id, kind: a.kind, by: a.by, v: a.v, rooms: a.kind === 'plan' ? a.data.doc.rooms.map((r) => r.name) : undefined, template: a.kind === 'board' ? a.data.plan.tiles[0]?.template : undefined, frameKind: a.kind === 'board' ? a.data.frame.kind : undefined }))));
+
+async function floorplan(page) {
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate((a) => window.__mcArtifacts.put(a), VALID_BOARD);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check((await frames(page)).length === 1, 'one board (the dashboard) before the floor plan');
+
+  await page.evaluate(() => { window.__mcCanvas.run('draw a two bedroom floor plan'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the floor-plan review opens'))) return;
+  const text = await page.evaluate(reviewText);
+  check(/Bedroom 1/.test(text) && /Bedroom 2/.test(text) && /Living room/.test(text), `the review lists the rooms (got ${JSON.stringify(text.slice(0, 400))})`);
+  check(/4 × 3 m/.test(text), 'the review gives room sizes in metres');
+  check(/walls, 5 rooms/.test(text), 'the review shows the plan check');
+  check(text.includes('Replay · written example'), 'the review names the engine: "Replay · written example"');
+  check((await frames(page)).length === 1, 'no board is made before Approve');
+  check((await planArtifacts(page)).filter((a) => a.kind === 'plan').length === 0, '0 plan artifacts before Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, () => window.__mcCanvas.frames().some((f) => f.kind === 'plan'), 5_000, 'a board of kind plan exists')
+    .then((ok) => ok && check(true, 'after Approve a second board, of kind plan, exists'));
+  check((await frames(page)).length === 2, 'two boards: the dashboard and the floor plan');
+  await waitFor(page, () => window.__mcArtifacts.list().then((l) => l.some((a) => a.kind === 'plan')), 5_000, 'the plan artifact is stored');
+  const stored = await planArtifacts(page);
+  const pa = stored.find((a) => a.kind === 'plan');
+  const pb = stored.find((a) => a.kind === 'board' && a.frameKind === 'plan');
+  check(!!pa && pa.by === 'replay' && pa.rooms.length === 5, `plan-<frame>-<board> stored by replay with 5 rooms (got ${JSON.stringify(pa)})`);
+  check(!!pb && pb.by === 'replay' && pb.template === 'blank', `board-<frame> stored by replay, its plan tile blank (got ${JSON.stringify(pb)})`);
+  await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 10_000, 'the drawing is on screen')
+    .then((ok) => ok && check(true, 'the generated drawing is on screen'));
+
+  await page.evaluate(() => { window.__mcCanvas.run('add a study next to bedroom 2'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the plan-edit review opens'))) return;
+  const edit = await page.evaluate(reviewText);
+  check(/Study/.test(edit), `the edit review names the study (got ${JSON.stringify(edit.slice(0, 300))})`);
+  check((await page.evaluate(planDrawing))?.rooms.includes('Study') === false, 'the study is not drawn before Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  await waitFor(page, () => window.__mcArtifacts.list().then((l) => l.some((a) => a.kind === 'plan' && a.data.doc.rooms.some((r) => r.name === 'Study'))), 5_000, 'the stored drawing has the study')
+    .then((ok) => ok && check(true, 'after Approve the stored drawing has the study'));
+  const edited = (await planArtifacts(page)).find((a) => a.kind === 'plan');
+  check(edited?.by === 'replay' && edited.v === 2, `the reviewed voice edit is credited to its engine, v2 (got ${JSON.stringify(edited && [edited.by, edited.v])})`);
+
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, () => window.__mcCanvas.frames().length === 2, 10_000, 'both boards are back after a reload')
+    .then((ok) => ok && check(true, 'both boards are back after a reload'));
+  const back = await page.evaluate(planDrawing);
+  check(!!back && back.rooms.includes('Study') && back.rooms.length === 6, `the drawing is back with the study (got ${JSON.stringify(back)})`);
+  await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 10_000, 'the drawing is on screen after the reload')
+    .then((ok) => ok && check(true, 'the drawing is on screen after the reload'));
+  await sleep(1200); // past the save debounce: loading rewrites nothing
+  const after = (await planArtifacts(page)).find((a) => a.kind === 'plan');
+  check(after?.v === 2 && after.by === 'replay', `loading keeps the drawing's version and maker (got ${JSON.stringify(after && [after.v, after.by])})`);
+}
+SECTIONS.floorplan = floorplan;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();

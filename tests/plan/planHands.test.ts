@@ -648,10 +648,10 @@ describe('the drawing is stored BESIDE the board, never inside what is sent out'
   };
 
   it('a surface plan has no place for a drawing: a model, a relayed board or storage cannot put one on a tile', () => {
-    const r = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'studio', doc: drawing() }] });
+    const r = coerceSurfacePlan({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'p-cad', template: 'blank', doc: drawing() }] });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.value.tiles[0]).toEqual({ type: 'plan', boardId: 'p-cad', template: 'studio' });
+      expect(r.value.tiles[0]).toEqual({ type: 'plan', boardId: 'p-cad', template: 'blank' });
       expect(JSON.stringify(r.value)).not.toContain(SECRET);
     }
   });
@@ -660,7 +660,7 @@ describe('the drawing is stored BESIDE the board, never inside what is sent out'
     const stored = {
       version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
       frames: [{ id: 'f1', kind: 'plan', title: 'Floor plan', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }],
-      surfaces: { f1: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] } },
+      surfaces: { f1: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'blank' }] } },
       drawings: { f1: { 'f1-cad': drawing() }, ghost: { x: drawing() } },
     };
     const doc = parseCanvasDoc(JSON.parse(JSON.stringify(stored)))!;

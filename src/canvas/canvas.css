@@ -1287,6 +1287,20 @@
 .mc-phone-simple mc-grid { grid-template-columns: minmax(0, 1fr) !important; }
 .mc-phone-simple mc-split > div { flex-direction: column !important; }
 .mc-phone-simple mc-card { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+/* A floor plan on the phone is read-mostly: the drawing tools (palette,
+   trash, hints, properties, full-screen) wait behind "Tools", and the plan
+   fills the board area between the extras row and the bottom chrome. */
+.mc-plan-tools-toggle { display: none; }
+.mc-phone-simple .mc-plan-tools-toggle { display: inline-block; }
+.mc-phone-simple .mc-plan-tools-toggle[aria-expanded="true"] { background: var(--accent-ink, #4F7356); color: #fff; border-color: var(--accent-ink, #4F7356); }
+.mc-phone-simple mc-plan-board:not(.mc-tools-open) :is(.mc-palette, .mc-flyout, .mc-trash, .mc-status, .mc-props, .mc-fsctl, .mc-screenmenu) { display: none !important; }
+.mc-phone-simple .mc-plan-extras { gap: 6px; }
+.mc-phone-simple .mc-plan-extra { min-height: 44px; min-width: 0; padding: 0 14px; font-size: 16px; }
+.mc-phone-simple .mc-plan-extra-status:empty { display: none; }
+.mc-phone-simple mc-plan-board .mc-plan-board {
+  height: max(280px, calc(100dvh - var(--mc-phone-top) - var(--mc-phone-chrome-h) - 200px
+    - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))) !important;
+}
 /* The board area: below the status bar and the route badge, above the bottom
    chrome. Both bands (and the status bar itself) are plain canvas colour, and
    the board is clipped at them — it scrolls between, never under the mic,

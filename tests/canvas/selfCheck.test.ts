@@ -80,7 +80,7 @@ describe('expectedControlCount', () => {
   });
   it('expects no controls of its own for a plan board — it has no onXxx action in its schema, ' +
     'unlike lamp/switch/music/scene/connect, because it embeds its own self-contained CAD surface', () => {
-    expect(expectedControlCount({ type: 'plan', boardId: 'b1', template: 'studio' })).toBe(0);
+    expect(expectedControlCount({ type: 'plan', boardId: 'b1', template: 'blank' })).toBe(0);
   });
   it('sums recursively through containers', () => {
     const lamp: TileSpec = { type: 'lamp', deviceId: 'd1', label: 'Lamp' };
@@ -325,7 +325,7 @@ describe('checkTile (plan board chrome)', () => {
     const host = fakeHost({ left: 0, top: 0, width: 400, height: 300 }, { 'data-mc-tile': 'plan' });
     const tool = fakeEl('button', { left: 8, top: 8, width: 40, height: 20 }, { 'aria-label': 'Select' });
     tool.parentElement = host;
-    const outcome = checkTile(host, { type: 'plan', boardId: 'b1', template: 'studio' }, fakeDoc([tool]));
+    const outcome = checkTile(host, { type: 'plan', boardId: 'b1', template: 'blank' }, fakeDoc([tool]));
     expect(outcome.ok).toBe(true);
     expect(outcome.failures).toEqual([]);
   });

@@ -10,7 +10,7 @@ import { NEXT_STEPS_CONSTRAINT, WARM_CONSTRAINT, WARM_PROMPT_TIMEOUT_MS, acceptC
 import { geminiFailLine, GHOST_EVERY_MS, NANO_STILL_LOADING, nanoLoadView, runSurfaceTurn, type SentInfo, type StreamOptions, type SurfaceEngine, type SurfaceRequest } from '../../src/canvas/aiTurn';
 import { createEngines, NO_NANO_NOTE, type OnDeviceStream } from '../../src/canvas/engines';
 import { createCanvasLedger } from '../../src/canvas/ledger';
-import { buildNanoPlanRequest, expandNanoPlan, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
+import { buildNanoPlanRequest, expandNanoPlan, NANO_NO_PLAN, NANO_SYSTEM_PROMPT, nanoPlanConstraint, parseNanoPlan, partialNanoPlan, UNSUPPORTED_CONSTRAINT_KEYWORDS, unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { installNanoTrace, resetNanoTrace } from '../../src/ai/nanoTrace';
 import { cloudFetchWatched, isGeminiRequestUrl, watchCloudFetch } from '../../src/ai/cloudFetchWatch';
 import { createWarmKeeper } from '../../src/ai/nanoWarm';
@@ -198,19 +198,15 @@ describe('A: on-device concurrency cap', () => {
     // the canvas's own devices: the reply the live run should produce
     const typical = JSON.stringify({ t: 'Living room', d: ['wiz-lamp-8', 'wiz-lamp-9', 'speaker-a'] });
     expect(typical.length).toBeLessThanOrEqual(120);
-    expect(JSON.stringify({ p: 'twoBedroom' }).length).toBeLessThanOrEqual(20);
   });
 
-  it('a floor-plan turn asks Nano for a template and nothing else', () => {
+  it('Nano never draws a floor plan: a plan ask is refused (Gemini writes plans)', () => {
     const planReq = { ...req, utterance: 'draw the floor plan', want: 'plan' as const };
     const r = buildNanoPlanRequest(planReq);
     expect(r.plan).toBe(true);
-    expect(r.constraint).toEqual({ type: 'object', additionalProperties: false, required: ['p'], properties: { p: { type: 'string', enum: ['studio', 'oneRoom', 'twoBedroom'] } } });
-    expect(r.user).not.toContain('wiz-lamp-9'); // the device list is not even sent
-    const got = parseNanoPlan('{"p":"twoBedroom"}', planReq);
-    expect(got).toEqual({ ok: true, value: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b3-cad', template: 'twoBedroom' }] } });
-    // her own words win over the model's pick
-    expect(parseNanoPlan('{"p":"oneRoom"}', { ...planReq, utterance: 'a floor plan with two bedrooms' })).toMatchObject({ ok: true, value: { tiles: [{ template: 'twoBedroom' }] } });
+    // No template list, no plan schema: the room schema only.
+    expect(JSON.stringify(r.constraint)).not.toMatch(/"p"|template/);
+    expect(parseNanoPlan('{"p":"anything"}', planReq)).toEqual({ ok: false, error: NANO_NO_PLAN });
     // the words decide when the caller did not say
     expect(buildNanoPlanRequest({ ...req, utterance: 'start a floor plan' }).plan).toBe(true);
     expect(buildNanoPlanRequest(req).plan).toBe(false);
@@ -237,8 +233,7 @@ describe('A: on-device concurrency cap', () => {
     expect(partialNanoPlan('{"t":"Living room","d":["wiz-lamp-9"', req).tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-9', label: 'Ceiling light' }]);
     expect(partialNanoPlan('{"t":"Living room","d":["wiz-lamp-9","speaker-a', req).tiles).toHaveLength(1);
     expect(partialNanoPlan('{"t":"Living room","d":["wiz-lamp-9","speaker-a"', req).tiles).toHaveLength(2);
-    expect(partialNanoPlan('{"p":"twoB', { ...req, want: 'plan' }).tiles).toEqual([]);
-    expect(partialNanoPlan('{"p":"twoBedroom"', { ...req, want: 'plan' }).tiles).toEqual([{ type: 'plan', boardId: 'b3-cad', template: 'twoBedroom' }]);
+    expect(partialNanoPlan('{"p":"x"', { ...req, want: 'plan' }).tiles).toEqual([]);
     // through a live turn: one ghost update per id, in order, not one at the end
     const seen: Array<{ at: number; tiles: number }> = [];
     let chars = 0;
@@ -826,7 +821,7 @@ describe('minors: stale streams stay silent; a busy Nano is said out loud', () =
     const plan = runSurfaceTurn(req, gemini, { onText: (t) => texts.push(t), onGhost: (g) => ghosts.push(g.tiles.length) }, { deviceIdSession: createDeviceIdSession(), sleep: () => (++wakes === 1 ? Promise.resolve() : never<void>()) });
     expect((await plan)?.title).toBe('Living room');
     const before = { texts: texts.length, ghosts: ghosts.length };
-    firstCalls[0]('{"kind":"room","title":"STALE","tiles":[{"type":"connect","label":"x"},{"type":"plan","boardId":"a","template":"studio"},{"type":"connect"}]}');
+    firstCalls[0]('{"kind":"room","title":"STALE","tiles":[{"type":"connect","label":"x"},{"type":"plan","boardId":"a","template":"blank"},{"type":"connect"}]}');
     expect({ texts: texts.length, ghosts: ghosts.length }).toEqual(before);
     expect(texts.join('')).not.toContain('STALE');
   });
@@ -976,7 +971,6 @@ describe('live fix: what Chrome’s Prompt API accepts', () => {
       'board (room)': nanoPlanConstraint(req.devices),
       'board (room, many devices)': nanoPlanConstraint(many),
       'board (room, no devices)': nanoPlanConstraint([]),
-      'board (floor plan)': nanoPlanConstraint(req.devices, true),
       'board as built for a turn': buildNanoPlanRequest(req).constraint,
       'warm-up': WARM_CONSTRAINT,
       'next steps': NEXT_STEPS_CONSTRAINT,
@@ -1111,7 +1105,7 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
         { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-lamp-8', label: 'Desk lamp' }, { type: 'lamp', deviceId: 'wiz-lamp-9', label: 'Ceiling light' }] },
         { type: 'music', deviceId: 'speaker-a', label: 'Speaker' },
       ] },
-      plan: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'plan-cad', template: 'twoBedroom' }] },
+      plan: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'plan-cad', template: 'blank' }] },
     };
     const ips = new Map<string, string>();
     // what canvasApp's deviceHints() hands the models
@@ -1183,11 +1177,11 @@ describe('real devices: the lamps on the canvas are the bulbs in the room', () =
   it('review 3: a plan accepted after the swap can never keep a seeded or stale lamp id', async () => {
     const lamps = [{ id: 'wiz-lamp-1', label: 'Lamp' }];
     // a SIM script / a plan from a prompt built before discovery
-    const script: SurfacePlan = JSON.parse('{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-lamp-9","label":"Main light"},{"type":"lamp","deviceId":"wiz-lamp-8","label":"Reading lamp"},{"type":"music","deviceId":"speaker-a","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}');
+    const script: SurfacePlan = JSON.parse('{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"wiz-lamp-9","label":"Main light"},{"type":"lamp","deviceId":"wiz-lamp-8","label":"Reading lamp"},{"type":"music","deviceId":"speaker-a","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"blank"},{"type":"connect","label":"Connect a device"}]}');
     expect(fitLampTiles(script, lamps).tiles).toEqual([
       { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' },
       { type: 'music', deviceId: 'speaker-a', label: 'Speaker' },
-      { type: 'plan', boardId: 'room-plan', template: 'oneRoom' },
+      { type: 'plan', boardId: 'room-plan', template: 'blank' },
       { type: 'connect', label: 'Connect a device' },
     ]);
     // the scan's seeded spec
@@ -1697,15 +1691,16 @@ describe('D: titles and counts come from the plan', () => {
     expect(betterSummary(lightAndSpeaker)).toBe('Better: 1 lamp and 1 speaker');
     const grouped: SurfacePlan = { kind: 'room', title: 'r', tiles: [
       { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'a', label: 'A' }, { type: 'lamp', deviceId: 'b', label: 'B' }] },
-      { type: 'plan', boardId: 'room-plan', template: 'oneRoom' },
+      { type: 'plan', boardId: 'room-plan', template: 'blank' },
       { type: 'connect', label: 'Connect a device' },
     ] };
     expect(betterSummary(grouped)).toBe('Better: 2 lamps, grouped + a room plan');
   });
 
-  it('the floor-plan title names the template that was really drawn', () => {
-    expect(floorPlanSummary({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b3-cad', template: 'twoBedroom' }] })).toBe('Floor plan: two bedrooms');
-    expect(floorPlanSummary({ kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b3-cad', template: 'studio' }] })).toBe('Floor plan: a studio');
+  it('the floor-plan title counts the rooms that were really drawn', () => {
+    expect(floorPlanSummary([{ name: 'Bedroom 1' }, { name: 'Bedroom 2' }, { name: 'Kitchen' }])).toBe('Floor plan: 3 rooms');
+    expect(floorPlanSummary([{ name: 'Studio' }])).toBe('Floor plan: 1 room');
+    expect(floorPlanSummary([])).toBe('Floor plan');
   });
 
   it('“tiles filled” counts every tile she will see, through the groups', () => {

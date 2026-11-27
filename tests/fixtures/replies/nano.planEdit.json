@@ -1,0 +1,10 @@
+{
+  "engine": "nano",
+  "model": "none (hand-written)",
+  "turnKind": "planEdit",
+  "recordedAt": "2026-11-27T14:00:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live Nano call was made for this task. The one plan edit Nano decides for 'add a study next to bedroom 2' (PLAN_EDIT_ACTIONS shape). scripts/e2e-actual.mjs, section floorplan, uses it. Re-record from a live run.",
+  "reply": "{\"a\": \"add\", \"r\": \"Bedroom 2\", \"n\": \"Study\"}"
+}

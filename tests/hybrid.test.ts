@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WHOLE_PLAN_CLARIFY } from '../src/plan/ruleParser';
 import {
   askCopilot,
   draftClientEmail,
@@ -354,30 +355,32 @@ describe('plan generate + edit against real cloud output', () => {
     expect(r.ops?.some((o) => o.op === 'select')).toBe(true);
   });
 
-  it('generatePlan falls back to a two-bedroom template when the cloud doc has no rooms', async () => {
+  // No plan is built from a template in the code: with no usable cloud plan
+  // the rules say so (a clarify) and draw nothing.
+  it('generatePlan draws nothing when the cloud doc has no rooms', async () => {
     setModelsForTest({ enabled: true, template: model(CLOUD_PLAN_NO_ROOMS, 'in_cloud') });
     const r = await generatePlan('two bedroom plan');
     expect(r.source).toBe('rules');
-    expect(r.ops && r.ops.length).toBeGreaterThan(0);
+    expect(r.ops).toBeUndefined();
+    expect(r.clarify).toBe(WHOLE_PLAN_CLARIFY);
   });
 
-  it('generatePlan degrades to a RULES two-bedroom plan when App Check fails (deployed init failure)', async () => {
+  it('generatePlan says it cannot draw when App Check fails (deployed init failure)', async () => {
     // The deployed path: Firebase/App Check init fails (or the network is
-    // blocked), so there is no cloud model at all. A "two bedroom plan" must
-    // still build — promptly, deterministically, and honestly badged RULES.
+    // blocked), so there is no cloud model at all: promptly, honestly badged
+    // RULES, and nothing drawn.
     setModelsForTest({ enabled: true, appCheck: 'failed' });
     const status = await prepareHybrid();
     expect(status.appCheck).toBe('failed');
     const r = await generatePlan('two bedroom plan');
     expect(r.source).toBe('rules');
-    expect(r.ops && r.ops.length).toBeGreaterThan(0);
-    // The shared wall is still pre-selected, so the demo edit lands offline too.
-    expect(r.ops?.some((o) => o.op === 'select')).toBe(true);
+    expect(r.ops).toBeUndefined();
+    expect(r.clarify).toBe(WHOLE_PLAN_CLARIFY);
   });
 
   it('generatePlan falls back to rules when the cloud call hangs (never resolves)', async () => {
     // A cloud "generate" with no timeout would leave the UI spinning forever.
-    // The hung call must time out and degrade to the deterministic template.
+    // The hung call must time out and say so (nothing drawn).
     vi.useFakeTimers();
     try {
       setModelsForTest({
@@ -388,7 +391,7 @@ describe('plan generate + edit against real cloud output', () => {
       await vi.advanceTimersByTimeAsync(13000); // past CLOUD_GENERATE_TIMEOUT_MS
       const r = await promise;
       expect(r.source).toBe('rules');
-      expect(r.ops && r.ops.length).toBeGreaterThan(0);
+      expect(r.clarify).toBe(WHOLE_PLAN_CLARIFY);
     } finally {
       vi.useRealTimers();
     }

@@ -8,13 +8,13 @@ import { applyGuestSnapshot } from '../src/canvas/phoneCanvasRuntime';
 import { applyPlanEdit, planRooms } from '../src/canvas/planEdit';
 import { PlanEngine } from '../src/plan/engine';
 import { validatePlanOp, type PlanOp } from '../src/plan/ops';
-import { buildPlanTemplate } from '../src/plan/templates';
+import { studioOps } from './helpers/planSamples';
 import type { PlanDoc } from '../src/plan/doc';
 import type { SurfacePlan } from '../src/canvas/surfacePlan';
 
 function studio(): PlanDoc {
   const e = new PlanEngine();
-  const ops = buildPlanTemplate('studio').map((o) => validatePlanOp(o)).filter((v): v is { ok: true; op: PlanOp } => v.ok).map((v) => v.op);
+  const ops = studioOps().map((o) => validatePlanOp(o)).filter((v): v is { ok: true; op: PlanOp } => v.ok).map((v) => v.op);
   e.applyGenerated(ops);
   return structuredClone(e.getState());
 }
@@ -24,7 +24,7 @@ function edited(): PlanDoc {
   if (!r.ok) throw new Error(r.error);
   return r.value.doc;
 }
-const BOARD: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'board-cad', template: 'studio' }] };
+const BOARD: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'board-cad', template: 'blank' }] };
 const names = (doc: unknown): string[] => planRooms(doc as PlanDoc).map((r) => r.name).sort();
 
 describe('board snapshot carries the CURRENT plan drawing', () => {
@@ -73,7 +73,7 @@ describe('board snapshot carries the CURRENT plan drawing', () => {
   // A LEGAL drawing (sanitizePlanDoc keeps it) that is still large: n text
   // notes of `text` each.
   const withTexts = (n: number, text: string) => ({ ...edited(), texts: Array.from({ length: n }, (_, i) => ({ id: `t${i}`, x: i, y: i, text, size: 200 })) });
-  const BOARD2: SurfacePlan = { kind: 'room', title: 'Two plans', tiles: [{ type: 'plan', boardId: 'big', template: 'studio' }, { type: 'plan', boardId: 'small', template: 'studio' }] };
+  const BOARD2: SurfacePlan = { kind: 'room', title: 'Two plans', tiles: [{ type: 'plan', boardId: 'big', template: 'blank' }, { type: 'plan', boardId: 'small', template: 'blank' }] };
 
   it('the WHOLE snapshot is bounded in UTF-8 bytes: non-ASCII drawings are shed, largest first', () => {
     // 1 550 notes of 190 chars of a 3-byte script: ~0.95 MB of UTF-8, yet
@@ -137,7 +137,7 @@ describe('board snapshot carries the CURRENT plan drawing', () => {
   });
 
   it('finds plan tiles nested in containers', () => {
-    const nested = { kind: 'room', title: 'R', tiles: [{ type: 'card', title: 'C', children: [{ type: 'plan', boardId: 'p-2', template: 'oneRoom' }] }] };
+    const nested = { kind: 'room', title: 'R', tiles: [{ type: 'card', title: 'C', children: [{ type: 'plan', boardId: 'p-2', template: 'blank' }] }] };
     expect(planBoardIds(nested)).toEqual(['p-2']);
     const snap = buildControlSnapshot({ board: nested, boardDrawings: { 'p-2': edited() } });
     expect(Object.keys(snap.boardDrawings ?? {})).toEqual(['p-2']);

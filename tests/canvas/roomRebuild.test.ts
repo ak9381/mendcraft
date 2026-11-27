@@ -82,7 +82,7 @@ describe('keepRoomDevices: a rebuild never drops a real device tile', () => {
     expect(keptRoomLine(k)).toBe('');
   });
   it('a floor plan is never touched', () => {
-    const plan: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b-cad', template: 'studio' }] };
+    const plan: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'b-cad', template: 'blank' }] };
     expect(keep(plan).plan).toBe(plan);
   });
 });

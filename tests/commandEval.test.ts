@@ -14,7 +14,7 @@ import {
 describe('opLabel', () => {
   it('maps op / generate / clarify envelopes', () => {
     expect(opLabel({ op: 'add_room' })).toBe('add_room');
-    expect(opLabel({ generate: 'twoBedroom' })).toBe('generate:twoBedroom');
+    expect(opLabel({ generate: 'blank' })).toBe('generate:blank');
     expect(opLabel({ clarify: 'which wall?' })).toBe('clarify');
   });
   it('is defensive about junk', () => {

@@ -20,7 +20,7 @@ function doc(): CanvasDoc {
     ],
     surfaces: {
       f1: { kind: 'room', title: 'Desk', tiles: [{ type: 'stat', label: 'Temperature', value: '21 °C' }] },
-      f2: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f2-cad', template: 'studio' }] },
+      f2: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f2-cad', template: 'blank' }] },
     },
     drawings: { f2: { 'f2-cad': DRAWING } },
     lang: 'kn',

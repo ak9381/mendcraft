@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { recordedEngine } from '../helpers/recordedEngine';
 import { PlanEngine } from '../../src/plan/engine';
 import { validatePlanOp, type PlanOp } from '../../src/plan/ops';
-import { buildPlanTemplate } from '../../src/plan/templates';
+import { twoBedroomOps } from '../helpers/planSamples';
 import type { PlanDoc } from '../../src/plan/doc';
 import { type SentInfo, type SurfaceEngine } from '../../src/canvas/aiTurn';
 import {
@@ -15,7 +15,7 @@ import { opWord } from '../../src/canvas/reviewDialog';
 
 function twoBedroom(): PlanDoc {
   const e = new PlanEngine();
-  const ops = buildPlanTemplate('twoBedroom').map((o) => validatePlanOp(o)).filter((v): v is { ok: true; op: PlanOp } => v.ok).map((v) => v.op);
+  const ops = twoBedroomOps().map((o) => validatePlanOp(o)).filter((v): v is { ok: true; op: PlanOp } => v.ok).map((v) => v.op);
   e.applyGenerated(ops);
   return structuredClone(e.getState());
 }

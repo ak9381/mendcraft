@@ -8,9 +8,8 @@ import { type Op } from '../core/ops';
 import { parseRefinedQuery, refinePrompt } from '../references/query';
 import { getActiveMode } from '../core/modes';
 import { coercePlanGenerate } from '../plan/ai';
-import { parsePlanCommand, isPlanGenerate } from '../plan/ruleParser';
-import { buildPlanTemplate, type PlanTemplateName } from '../plan/templates';
-import { validatePlanOp, type PlanOp } from '../plan/ops';
+import { WHOLE_PLAN_CLARIFY } from '../plan/ruleParser';
+import type { PlanOp } from '../plan/ops';
 import {
   buildFusionConstraint,
   buildFusionPrompt,
@@ -2269,24 +2268,9 @@ export async function generatePlan(prompt: string, opts?: { planNames?: string[]
     }
   }
   recordInference('rules', 'generate-plan');
-  // Rules fallback: a named template → re-validated ops. An unrecognised design
-  // request still gets an honest two-bedroom plan rather than a dead-end clarify.
-  const ruled = parsePlanCommand(prompt);
-  let template: PlanTemplateName | null = isPlanGenerate(ruled) ? ruled.generate : null;
-  let note: string | undefined;
-  if (!template && getActiveMode().isDesignRequest(prompt)) {
-    template = 'twoBedroom';
-    note = 'Cloud plan was unavailable — built a two-bedroom template instead.';
-  }
-  if (template) {
-    const ops: PlanOp[] = [];
-    for (const env of buildPlanTemplate(template)) {
-      const v = validatePlanOp(env);
-      if (v.ok) ops.push(v.op);
-    }
-    if (ops.length) return { ops, note, source: 'rules' };
-  }
-  return { clarify: 'Try "two bedroom plan", "studio", or "room 4 by 3".', source: 'rules' };
+  // No rules fallback for a whole plan: plans are generated and checked,
+  // never filled in from a template.
+  return { clarify: WHOLE_PLAN_CLARIFY, source: 'rules' };
 }
 
 /** Cloud explanations (and optional alternative fixes) for a11y issues. */

@@ -5,7 +5,6 @@
 // title/label) and falling back to the visible label when ids differ.
 
 import type { DeviceState, SurfacePlan, TileSpec } from './surfacePlan';
-import { buildPlanTemplate, isPlanTemplateName } from '../plan/templates';
 import type { PlanDoc } from '../plan/doc';
 
 export type PlanChangeOp = 'add' | 'change' | 'remove';
@@ -38,18 +37,11 @@ interface Item {
 const CONTAINER_KINDS = new Set(['group', 'tabs']);
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-/** "5 rooms (Bedroom 1, …) · 5 doors · 5 windows" for a floor-plan template. */
+/** What a plan tile shows in a board review. Its drawing is not in the
+ *  surface plan (it is stored beside the board), so the tile says only that. */
 export function floorPlanSummary(template: string): string {
-  if (!isPlanTemplateName(template)) return 'floor plan';
-  let ops: Record<string, unknown>[] = [];
-  try { ops = buildPlanTemplate(template); } catch { return 'floor plan'; }
-  const rooms = ops.filter((o) => o.op === 'add_room').map((o) => String(o.name ?? 'Room'));
-  const doors = ops.filter((o) => o.op === 'add_door').length;
-  const windows = ops.filter((o) => o.op === 'add_window').length;
-  const parts = [`${plural(rooms.length, 'room')}${rooms.length ? ` (${rooms.join(', ')})` : ''}`];
-  if (doors) parts.push(plural(doors, 'door'));
-  if (windows) parts.push(plural(windows, 'window'));
-  return parts.join(' · ');
+  void template;
+  return 'floor plan';
 }
 
 function deviceDetail(kind: 'lamp' | 'music' | 'switch', st: Partial<DeviceState> | undefined): string {
@@ -92,7 +84,7 @@ function leafItem(t: TileSpec, ctx: PlanDiffContext): Item | null {
       };
     case 'plan': {
       const summary = floorPlanSummary(t.template);
-      const room = /room-plan/.test(t.boardId) || t.template === 'oneRoom';
+      const room = /room-plan/.test(t.boardId);
       return { key: `plan:${t.boardId}`, kind: 'plan', label: room ? 'Room plan' : 'Floor plan', detail: summary, facts: { layout: summary } };
     }
     case 'scene':

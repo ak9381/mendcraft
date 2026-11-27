@@ -2,9 +2,9 @@
   "language": "kn",
   "note": "Short Kannada plan-mode utterances with an English gloss. The deterministic rules path is English-only, so offline it correctly DECLINES every one (clarify) and the app routes them to the cloud translate+op path. `expect` is the TRUE intended op for the cloud path; the rules eval here measures the route-off rate, not op accuracy.",
   "cases": [
-    { "text": "ಎರಡು ಬೆಡ್‌ರೂಮ್ ಪ್ಲಾನ್", "gloss": "two bedroom plan", "expect": "generate:twoBedroom" },
-    { "text": "ಒಂದು ಬೆಡ್‌ರೂಮ್", "gloss": "one bedroom", "expect": "generate:oneRoom" },
-    { "text": "ಸ್ಟುಡಿಯೋ ಮಾಡಿ", "gloss": "make a studio", "expect": "generate:studio" },
+    { "text": "ಎರಡು ಬೆಡ್‌ರೂಮ್ ಪ್ಲಾನ್", "gloss": "two bedroom plan", "expect": "clarify" },
+    { "text": "ಒಂದು ಬೆಡ್‌ರೂಮ್", "gloss": "one bedroom", "expect": "clarify" },
+    { "text": "ಸ್ಟುಡಿಯೋ ಮಾಡಿ", "gloss": "make a studio", "expect": "clarify" },
     { "text": "ನಾಲ್ಕು ಮೂರು ಕೋಣೆ", "gloss": "a four by three room", "expect": "add_room" },
     { "text": "ಒಂದು ಕೋಣೆ ಸೇರಿಸಿ", "gloss": "add a room", "expect": "add_room" },
     { "text": "ಒಂದು ಬಾಗಿಲು ಸೇರಿಸಿ", "gloss": "add a door", "expect": "add_door" },

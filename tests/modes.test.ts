@@ -36,9 +36,13 @@ describe('mode registry', () => {
     expect(planMode.starterItems.length).toBeGreaterThan(0);
   });
 
-  it("every plan quick-start button parses to something buildable (not a clarify)", () => {
+  // A whole plan ("two bedroom plan") is drawn by the model, never from a
+  // template in the code: the rules only build single edits.
+  it("every plan quick-start button is a single edit the rules build, or a whole plan for the model", () => {
     for (const h of planMode.hints) {
+      if (planMode.isDesignRequest(h.command)) continue;
       expect(isClarify(planMode.parse(h.command)), `hint "${h.command}" should not clarify`).toBe(false);
     }
+    expect(planMode.hints.some((h) => !planMode.isDesignRequest(h.command))).toBe(true);
   });
 });

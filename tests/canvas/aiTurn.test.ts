@@ -226,7 +226,7 @@ describe('redaction covers nested surface plans', () => {
 
 
 describe('Gemini tile-agent timeout and retry', () => {
-  const PLAN = '{"kind":"room","title":"Studio","tiles":[{"type":"lamp","deviceId":"wiz-1","label":"Desk lamp"},{"type":"plan","boardId":"plan-1","template":"studio"}]}';
+  const PLAN = '{"kind":"room","title":"Studio","tiles":[{"type":"lamp","deviceId":"wiz-1","label":"Desk lamp"},{"type":"plan","boardId":"plan-1","template":"blank"}]}';
   const req = { utterance: 'connect everything', frameTitle: 'Studio', devices: [] as { id: string; label: string; kind: string }[] };
   const instant = async (_ms: number) => { /* expire immediately */ };
 

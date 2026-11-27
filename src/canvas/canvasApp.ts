@@ -9,9 +9,9 @@ import { isTypingTarget, stepZoom, wheelIntent, zoomCameraTo } from './canvasNav
 import { mountZoomHud } from './zoomHud';
 import { attachBoardDrag } from './boardDrag';
 import { applyTransform, createTwoHandGesture, type Vec } from '../input/twoHandTransform';
-import { CANVAS_DOC_VERSION, FRAME_SIZE, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
+import { CANVAS_DOC_VERSION, FRAME_SIZE, MAX_FRAMES, createFrameRegistry, parseCanvasDoc, type CanvasDoc, type Frame, type FrameRegistry } from './frames';
 import { resolveFrame, saveShouldOpenNextBoard, saveShouldPin } from './canvasCommands';
-import { expandPlan, gimbalUpdate, tileComponentId, type GimbalTileState, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
+import { coerceSurfacePlan, expandPlan, gimbalUpdate, tileComponentId, type GimbalTileState, type A2uiMessage, type DeviceState, type SurfacePlan, type TileSpec } from './surfacePlan';
 import { gateMessages } from './gate';
 import { CATALOG_SCHEMAS } from './catalogApi';
 import { createSurfaceProposal, type SurfaceProposal } from './proposalBuffer';
@@ -54,7 +54,8 @@ import { connectorState, createConnectorGate, createUnreachableLampConnector, cr
 import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR_SENT_WORDS, connectorArtifactId, lampConnectorKey, parseConnectorReply, WIZ_LAMP_IDENTITY } from './connectorTurn';
 import { isPrivateIPv4 } from '../devices/connector';
 import { getLanPlugin } from '../devices/native';
-import { coerceArtifact, type Artifact, type ArtifactBy } from '../artifacts/artifact';
+import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
+import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
 import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
@@ -75,7 +76,7 @@ import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
 import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength } from './ledger';
-import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
+import { ABSENT_DEVICE_LINE, WRONG_CLASS_LINE, dropAbsentDevices, betterSummary, roomSummary, draftSummary, floorPlanSummary, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
   SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
@@ -116,7 +117,7 @@ import { mountToolPalette } from './toolPalette';
 import { cloudReceivedDetail, logTurnReceipt, MODEL_PANELS_HTML, mountModelPanels } from './modelPanels';
 import { mountDraggablePanel, mountResizablePanel } from './dragPanel';
 import { mountEditBoard, topLevelOf, type EditEl, type EditItemRef } from './editBoard';
-import { combineFacts, connectorChanges, madeByFacts, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
+import { combineFacts, connectorChanges, madeByFacts, planGenerateChanges, createReviewReceipts, engineName, mountReviewDialog, type ReviewFacts } from './reviewDialog';
 import { diffPlanDocs, diffPlans, diffTile, languagePackChanges } from './planDiff';
 import { AI_PANEL_ALWAYS_OPEN, createActivityLog } from './activityLog';
 import { createActivityBroadcast } from './activityFeed';
@@ -173,6 +174,9 @@ export interface CanvasOptions {
   /** Who made the board on a frame (what its stored artifact says, or would
    *  say on the next save), if known. Sent with a board to a phone. */
   artifactBy?: (frameId: string) => ArtifactBy | undefined;
+  /** Frame id → the maker of its stored board (as loaded). A phone treats a
+   *  stored board as the laptop's unless it was stored as her own. */
+  storedMakers?: Readonly<Record<string, ArtifactBy>>;
   /** Approved connector artifacts (checked at load): a lamp whose connector
    *  is here runs on it, through the fixed bridge client only. */
   connectors?: readonly Artifact[];
@@ -331,6 +335,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
   // What was drawn on floor-plan boards (frame id → plan board id → plan doc).
   const drawings: Drawings = JSON.parse(JSON.stringify(doc.drawings ?? {})) as Drawings;
+  /** Who made each floor-plan drawing as it is now (frame + plan board id):
+   *  the engine that generated it, the engine of an approved voice edit, or
+   *  'her' after her own hand or mouse edit. A drawing's maker is its own,
+   *  apart from the board it sits on (a hand edit never makes the board hers). */
+  const planKey = (frameId: string, boardId: string): string => `${frameId}\n${boardId}`;
+  const planMakers = new Map<string, EngineId | 'her'>();
+  /** The engine that generated each drawing this session (what an Undo of
+   *  every later edit goes back to). */
+  const planGeneratedBy = new Map<string, EngineId>();
   // Boards saved before the floor plan had its own board: lift a dashboard's
   // plan tile (and its drawing) onto a "Floor plan" board, once, on load.
   liftLegacyPlanTiles(reg.list(), surfaces, drawings, () => {
@@ -351,8 +364,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     viewportWidth: window.innerWidth,
   }));
   /** Phone shell: frames holding a board from the laptop (received now, or
-   *  stored from before — a phone's stored boards came from the laptop). */
-  const receivedFrames = new Set<string>(phoneShell ? Object.keys(doc.surfaces ?? {}) : []);
+   *  stored from before and made by a model — a board she made here herself,
+   *  stored as 'person', is not one). */
+  const receivedFrames = new Set<string>(phoneShell ? Object.keys(doc.surfaces ?? {}).filter((id) => opts.storedMakers?.[id] !== 'person') : []);
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -2143,6 +2157,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     delete surfaces[id];
     const closedDrawings = drawings[id];
     delete drawings[id];
+    for (const k of [...planMakers.keys()]) if (k.startsWith(`${id}\n`)) { planMakers.delete(k); planGeneratedBy.delete(k); }
     history.push({ frameId: id, before: surface, after: null, by: 'her', summary: `Closed ${f.title}`, kind: 'close', closedFrame: f, ...(closedDrawings ? { closedDrawings } : {}) });
     if (focusId === id) { focusId = null; void overview(); } else sync();
     updateDock(); persist(); historyRender();
@@ -2908,26 +2923,109 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     await aiTurn(frameId, 'gemini', utterance, 'boardBetter', betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL);
   }
   /** "draw the floor plan" (voice, chip, gesture, the empty-board button):
-   *  the plan lives on its OWN board titled "Floor plan" — the existing one is
-   *  focused, else a new one is made (an empty board she is on is used as
-   *  that new board). Never written into a dashboard or any board with tiles. */
-  function openFloorPlan(from: string | null, utterance = 'start a floor plan'): void {
-    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    const target = floorPlanTarget({ frames: reg.list(), surfaces, from });
-    let id = target.id;
-    if (target.make) {
-      // A board with tiles (the dashboard) stays as it is, pinned beside.
-      if (from && surfaces[from]?.tiles.length) reg.setPinned(from, true);
-      id = reg.add('plan', FLOOR_PLAN_TITLE).id;
-    } else if (target.reuseEmpty) { reg.rename(id!, FLOOR_PLAN_TITLE); reg.setKind(id!, 'plan'); }
-    if (focusId !== id) { sync(); void focus(id!); }
-    if (target.existing && surfaces[id!]?.tiles.length) { say('Here is your floor plan board.'); return; }
-    reg.setKind(id!, 'plan'); // the turn on this board is a floor plan (planForBoard)
-    floorPlan(id!, utterance);
+   *  Gemini writes the plan as a document, code draws it as checked geometry
+   *  (planGenerate.ts), and she reviews the rooms and the checks. Approve
+   *  opens it on a NEW board of its own — never written into a dashboard or
+   *  any other board — with the drawing stored BESIDE the board's surface
+   *  plan. Reject, or a reply that fails its check, changes nothing. */
+  function openFloorPlan(_from: string | null, utterance = 'start a floor plan'): void {
+    void floorPlanTurn(utterance).finally(() => settleEngines());
   }
-  function floorPlan(frameId: string, utterance = 'start a floor plan'): void {
+  async function floorPlanTurn(utterance: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    void aiTurn(frameId, 'nano', utterance, 'plan', floorPlanSummary, 'waiting', 'floorplan');
+    if (!net.isOnline()) { say('Drawing a floor plan needs Gemini, and you are offline. Nothing was generated.', { speak: true }); return; }
+    const engine = engineFor('gemini', 'plan');
+    if (!engine) { noModel('gemini'); return; }
+    if (reg.list().length >= MAX_FRAMES) { say(`The canvas holds ${MAX_FRAMES} boards. Close one first. Nothing was generated.`, { speak: true }); return; }
+    const routeOf = (): string => {
+      const rl = engine.routeLine ?? PLAN_GENERATE_ROUTE_LINE;
+      return engine.sim && !rl.startsWith('SIM') ? `SIM · ${rl}` : rl;
+    };
+    const base = buildPlanGeneratePrompt(utterance);
+    // What leaves is redacted on this device, like every cloud turn; the
+    // receipt shows the prompt that really left.
+    const sent: SentInfo = { ...base, prompt: protectTurn(utterance, base.prompt).promptText, sim: engine.sim, routeLine: routeOf() };
+    turnBusy = true;
+    let full = '';
+    try {
+      aiSent(utterance, sent, { task: 'floorplan', defer: true, swarm: false });
+      try { full = await engine.stream(sent.prompt, () => {}, { shape: 'json', onCloudSend: () => cloudSent(sent), onCloudRetract: () => cloudRetract(sent) }); }
+      catch (e) {
+        settleSwarm();
+        const why = `The floor plan didn’t arrive. ${geminiFailLine(e)}`;
+        panels.forEngine('gemini').fail(why);
+        say(why, { speak: true }); return;
+      }
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); }
+    sent.routeLine = routeOf();
+    // A reply's redaction tokens become the real names again on this device.
+    const r = planFromReply(fillVisible(full).text);
+    if (!r.ok) {
+      settleSwarm();
+      panels.forEngine('gemini').fail(`refused the floor plan: ${r.error}`);
+      aiPanel.querySelector('.mc-ai-state')!.textContent = PLAN_GENERATE_FAIL;
+      say(PLAN_GENERATE_FAIL, { speak: true });
+      bodyLanguage('no');
+      autoHideAi();
+      return;
+    }
+    await finishSwarm();
+    const summary = floorPlanSummary(r.rooms);
+    panels.forEngine('gemini').log('replied', `${summary} · ${r.findings.length} check line${r.findings.length === 1 ? '' : 's'}`);
+    aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
+    const ranId: EngineId = sent.engine;
+    await new Promise<void>((done) => {
+      let decided = false;
+      const prop: SurfaceProposal = {
+        id: `pg-${Date.now()}`, by: ranId, summary,
+        status: () => (decided ? 'accepted' : 'pending'),
+        accept: () => { if (decided) return false; decided = true; return true; },
+        reject: () => { if (decided) return false; decided = true; return true; },
+      };
+      const finish = (line: string) => {
+        reviewDialog.close(); pending = null;
+        aiPanel.querySelector('.mc-ai-state')!.textContent = line;
+        autoHideAi();
+        say(line, { speak: true });
+        done();
+      };
+      const keepIt = (): void => {
+        prop.accept();
+        // Applied only now: a new board of kind plan, its plan tile blank,
+        // the drawing beside it (re-checked as the artifact it becomes).
+        let id: string;
+        try { id = reg.add('plan', FLOOR_PLAN_TITLE).id; } catch (e) { finish(e instanceof Error ? `${e.message} Nothing changed.` : 'Couldn’t open a new board. Nothing changed.'); return; }
+        const boardId = `${id}-cad`;
+        const doc = sanitizePlanDoc(r.doc);
+        const plan = coerceSurfacePlan({ kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [{ type: 'plan', boardId, template: 'blank' }] });
+        if (!doc || !plan.ok) { reg.remove(id); sync(); finish(PLAN_GENERATE_FAIL); return; }
+        drawings[id] = { [boardId]: doc };
+        setSavedPlanDoc(id, boardId, doc);
+        planMakers.set(planKey(id, boardId), ranId);
+        planGeneratedBy.set(planKey(id, boardId), ranId);
+        surfaces[id] = plan.value;
+        if (!renderSurface(id)) { delete surfaces[id]; delete drawings[id]; setSavedPlanDoc(id, boardId, null); reg.remove(id); sync(); finish(PLAN_GENERATE_FAIL); return; }
+        history.push({ frameId: id, before: null, after: plan.value, by: ranId, summary });
+        sync(); updateDock(); persist(); historyRender();
+        void focus(id);
+        finish(`Kept: ${summary}. Say “undo” to put it back.`);
+        nextChips?.refresh();
+        bodyLanguage('yes');
+      };
+      const card = renderProposalCard(document, {
+        id: 'p-floorplan', title: summary, youAsked: utterance, status: 'waiting',
+        catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: sent.routeLine, lineId: 'custom', whyLabel: 'Why online', whatWasSent: sent.sent, technicalLine: sent.routeLine },
+      }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish('Dropped. Nothing changed.'); } });
+      tagCardI18n(card);
+      pending = { frameId: 'p-floorplan', prop, card };
+      showReview({
+        title: summary, card, extra: buildReviewExtra(),
+        changes: planGenerateChanges(r.rooms),
+        notes: [...r.findings.map((f) => `Check: ${f}`), 'Code drew every wall from the rooms Gemini placed, and checked them. It opens on a new board.'],
+        facts: reviewFacts(sent, utterance),
+      }, { tokens: [sent], facts: () => reviewFacts(sent, utterance) });
+      say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);
+    });
   }
 
   // ---- voice / typed edits to the floor plan already on a board ----
@@ -3683,7 +3781,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // back with its own undo steps — no copy of the plan lives here.
       const pb = world.querySelector<HTMLElement & { undoPlanEdit?: (steps: number, epoch: number) => number }>(`[data-frame="${h.frameId}"] mc-plan-board`);
       const n = pb?.undoPlanEdit?.(h.planSteps ?? 0, h.planEpoch ?? -1) ?? 0;
-      if (n) savePlanDrawing(h.frameId, pb);
+      if (n) {
+        // The drawing goes back to whoever made it before this edit.
+        const prev = history.list().filter((x) => x.frameId === h.frameId && x.kind === 'plan' && !x.undone && x !== h).at(-1)?.by;
+        for (const [k] of planMakers) if (k.startsWith(`${h.frameId}\n`)) { const g = planGeneratedBy.get(k); if (prev ?? g) planMakers.set(k, (prev ?? g)!); else planMakers.delete(k); }
+        savePlanDrawing(h.frameId, pb);
+      }
       historyRender();
       say(n ? `Undid: ${h.summary}.` : `Could not undo “${h.summary}” — that plan was redrawn since.`);
       return;
@@ -4122,9 +4225,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const frameEl = path.find((n) => (n as HTMLElement).dataset?.frame) as HTMLElement | undefined;
       const frameId = frameEl?.dataset.frame ?? (e.target as HTMLElement | null)?.closest?.<HTMLElement>('[data-frame]')?.dataset.frame;
       if (!d || !frameId) return;
-      history.push({ frameId, before: null, after: null, by: planEditBy ?? 'her', summary: d.summary, kind: 'plan', planSteps: d.steps, planEpoch: d.epoch });
+      const by = planEditBy ?? 'her';
+      history.push({ frameId, before: null, after: null, by, summary: d.summary, kind: 'plan', planSteps: d.steps, planEpoch: d.epoch });
       historyRender();
-      savePlanDrawing(frameId, path.find((n) => (n as HTMLElement).tagName === 'MC-PLAN-BOARD') as HTMLElement | undefined);
+      const pb = path.find((n) => (n as HTMLElement).tagName === 'MC-PLAN-BOARD') as (HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null }) | undefined;
+      // The drawing is now this edit's maker's: hers for a hand or mouse
+      // edit, the engine's for a voice edit she approved in review.
+      const boardId = pb?.planState?.()?.boardId;
+      for (const b of boardId ? [boardId] : planTilesOf(surfaces[frameId] ?? { kind: 'plan', title: '', tiles: [] }).map((t) => t.boardId)) planMakers.set(planKey(frameId, b), by);
+      savePlanDrawing(frameId, pb);
     });
   }
   /** Gestures are paused while something else owns the hands: a fist grab,
@@ -5525,6 +5634,26 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  edit here) makes the next save hers. */
   const receivedMakers = new Map<string, { by: ArtifactBy; entries: number }>();
   const entriesOn = (frameId: string): number => history.list().filter((h) => h.frameId === frameId).length;
+  /** Who made what a board or drawing artifact shows, from this session's
+   *  changes: 'person' for her own, the engine id for a model's, undefined
+   *  when nothing in this session changed it (the stored maker stands — an
+   *  app-made re-fit, such as a lamp re-bound after a reload, is no one's
+   *  change). A board's maker never counts edits to its drawing, and a
+   *  drawing's maker is its own (planMakers). */
+  function makerOf(id: string): ArtifactBy | undefined {
+    const frameId = frameIdOfArtifactId(id);
+    if (!frameId) return undefined;
+    const asBy = (by: EngineId | 'her'): ArtifactBy => (by === 'her' ? 'person' : by);
+    if (id.startsWith('plan-')) {
+      for (const [k, by] of planMakers) {
+        const [f, b] = k.split('\n');
+        if (f === frameId && artifactId('plan', f, b) === id) return asBy(by);
+      }
+      return undefined;
+    }
+    const last = history.list().filter((h) => h.frameId === frameId && !h.undone && h.kind !== 'plan' && h.kind !== 'lang' && h.kind !== 'resize').at(-1);
+    return last ? asBy(last.by) : undefined;
+  }
   function receivedBy(frameId: string): ArtifactBy | undefined {
     const r = receivedMakers.get(frameId);
     if (!r) return undefined;
@@ -6073,7 +6202,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
   return {
-    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, receivedBy, sharedBoards: () => boardEdge.sharedBoards(), destroy,
+    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, receivedBy, makerOf, isReceivedFrame: (frameId: string) => receivedFrames.has(frameId), sharedBoards: () => boardEdge.sharedBoards(), destroy,
     /** Status lines said so far (a mark, then the lines said since it). */
     statusMark: () => statusBase + statusLog.length,
     /** Dev / test builds with ?sim=1 only: the gimbal relay messages a SIM run would have sent. */

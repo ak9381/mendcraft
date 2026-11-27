@@ -59,6 +59,7 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
         <button type="button" class="mc-plan-extra" data-extra="check" @click=${() => this.runExtra('check')}>Check</button>
         <button type="button" class="mc-plan-extra" data-extra="3d" aria-pressed=${this.is3d ? 'true' : 'false'} @click=${() => this.runExtra('3d')}>3D</button>
         <button type="button" class="mc-plan-extra" data-extra="dxf" @click=${() => this.runExtra('dxf')}>DXF</button>
+        <button type="button" class="mc-plan-extra mc-plan-tools-toggle" data-extra="tools" aria-expanded="false" title="Show the drawing tools" @click=${() => this.toggleTools()}>Tools</button>
         <button type="button" class="mc-plan-extra mc-plan-hand-toggle" data-extra="hands" aria-pressed="true" title="Hand edit: a fist on the plan draws and moves things. Off: a fist moves the board." @click=${() => this.toggleHandEdit()}>Hand edit</button>
         <span class="mc-plan-extra-status" role="status" aria-live="polite"></span>
       </div><div class="mc-plan-board" tabindex="0" aria-label="Floor plan drawing area" style="height:420px;border:2px solid #E4E0D8;border-radius:16px;overflow:hidden;background:#fff;position:relative"></div>`;
@@ -76,6 +77,19 @@ export class PlanBoardElement extends A2uiLitElement<typeof PlanBoardApi> {
     this.querySelector('.mc-plan-hand-toggle')?.setAttribute('aria-pressed', next ? 'true' : 'false');
     const status = this.querySelector<HTMLElement>('.mc-plan-extra-status');
     if (status) status.textContent = next ? 'Hand edit on: a fist on the plan draws and moves things.' : 'Hand edit off: a fist on the plan moves the board.';
+    return next;
+  }
+  /** Phone shell: the plan shows read-mostly (drawing tools tucked away) and
+   *  "Tools" brings the palette back. The plan is re-fitted either way so it
+   *  uses the room the palette leaves. Returns whether the tools show. */
+  toggleTools(on?: boolean): boolean {
+    const next = on ?? !this.classList.contains('mc-tools-open');
+    this.classList.toggle('mc-tools-open', next);
+    const btn = this.querySelector('.mc-plan-tools-toggle');
+    btn?.setAttribute('aria-expanded', next ? 'true' : 'false');
+    btn?.setAttribute('title', next ? 'Hide the drawing tools' : 'Show the drawing tools');
+    this.view?.fit?.();
+    this.view?.render();
     return next;
   }
   /** This board's plan id and its drawing right now (for saving with the board). */

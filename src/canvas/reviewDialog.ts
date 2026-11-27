@@ -160,6 +160,13 @@ export function connectorChanges(c: Connector, intents: IntentMap): PlanChange[]
   return out;
 }
 
+/** A generated floor plan's review plan: each room with its size in metres.
+ *  (What the plan checks found is shown beside it, as notes.) */
+export function planGenerateChanges(rooms: readonly { name: string; w: number; h: number }[]): PlanChange[] {
+  const m = (v: number): string => String(Math.round(v * 10) / 10);
+  return rooms.map((r) => ({ op: 'add' as const, label: r.name.replace(/[<>]/g, '').slice(0, 40) || 'Room', detail: `${m(r.w)} × ${m(r.h)} m` }));
+}
+
 /** What a turn told the ledger (aiTurn's SentInfo shape, kept structural). */
 export interface ReviewTurn { engine: string; sent: string | null; routeLine: string; sim: boolean }
 

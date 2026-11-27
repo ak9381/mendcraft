@@ -25,8 +25,9 @@ import {
   parsePlanCommand,
   isPlanGenerate,
   isPlanClarify,
-} from '../src/plan/ruleParser';
-import { buildPlanTemplate } from '../src/plan/templates';
+  WHOLE_PLAN_CLARIFY,
+} from "../src/plan/ruleParser";
+import { twoBedroomOps } from './helpers/planSamples';
 import { coercePlan, coercePlanGenerate, expandPlanDocument } from '../src/plan/ai';
 
 // Apply a loose envelope through the real validator, like the controller does.
@@ -201,7 +202,7 @@ describe('plan engine — parametric edits', () => {
 describe('plan templates + generate', () => {
   it('two-bedroom template builds a believable flat sharing wall w3, dimensioned + selected', () => {
     const e = new PlanEngine();
-    const ops = buildPlanTemplate('twoBedroom').map((o) => {
+    const ops = twoBedroomOps().map((o) => {
       const v = validatePlanOp(o);
       if (!v.ok) throw new Error(v.error);
       return v.op;
@@ -228,7 +229,7 @@ describe('plan templates + generate', () => {
 
   it('two-bedroom → set shared wall w3 to 4000 STRETCHES: bedrooms 4×4, no slanted walls', () => {
     const e = new PlanEngine();
-    const ops = buildPlanTemplate('twoBedroom').map((o) => (validatePlanOp(o) as { ok: true; op: never }).op);
+    const ops = twoBedroomOps().map((o) => (validatePlanOp(o) as { ok: true; op: never }).op);
     e.applyGenerated(ops);
     const beforeAxis = e.getState().walls.every(
       (w) => Math.abs(w.a.x - w.b.x) < 1 || Math.abs(w.a.y - w.b.y) < 1,
@@ -252,7 +253,7 @@ describe('plan templates + generate', () => {
 
   it('applyGenerated is one undoable step', () => {
     const e = new PlanEngine();
-    const ops = buildPlanTemplate('twoBedroom').map((o) => (validatePlanOp(o) as { ok: true; op: never }).op);
+    const ops = twoBedroomOps().map((o) => (validatePlanOp(o) as { ok: true; op: never }).op);
     e.applyGenerated(ops);
     e.apply({ op: 'undo' });
     expect(e.getState().walls).toHaveLength(0);
@@ -260,11 +261,11 @@ describe('plan templates + generate', () => {
 });
 
 describe('plan rule parser', () => {
-  it('maps whole-plan phrases to generate directives', () => {
-    expect(parsePlanCommand('two bedroom plan')).toEqual({ generate: 'twoBedroom' });
-    expect(parsePlanCommand('two-bedroom plan')).toEqual({ generate: 'twoBedroom' });
-    const one = parsePlanCommand('one bedroom plan');
-    expect(isPlanGenerate(one) && one.generate).toBe('oneRoom');
+  it('never builds a whole plan from a template: it says the model draws it', () => {
+    expect(parsePlanCommand('two bedroom plan')).toEqual({ clarify: WHOLE_PLAN_CLARIFY });
+    expect(parsePlanCommand('two-bedroom plan')).toEqual({ clarify: WHOLE_PLAN_CLARIFY });
+    expect(isPlanGenerate(parsePlanCommand('one bedroom plan'))).toBe(false);
+    expect(parsePlanCommand('studio')).toEqual({ clarify: WHOLE_PLAN_CLARIFY });
   });
 
   it('parses single edits with units and spoken numbers', () => {
@@ -309,8 +310,8 @@ describe('plan rule parser', () => {
   });
 
   it('the demo path parses + validates end to end', () => {
-    // "two bedroom plan" → template → "make this wall 4 meters" on w3.
-    expect(parsePlanCommand('two bedroom plan')).toEqual({ generate: 'twoBedroom' });
+    // "two bedroom plan" is the model's; "make this wall 4 meters" is the rules'.
+    expect(parsePlanCommand('two bedroom plan')).toEqual({ clarify: WHOLE_PLAN_CLARIFY });
     const edit = parsePlanCommand('make this wall 4 meters');
     const v = validatePlanOp(edit as Record<string, unknown>);
     expect(v.ok && v.op).toEqual({ op: 'set_length', target: 'selected', length: 4000 });

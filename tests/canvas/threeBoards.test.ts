@@ -11,9 +11,9 @@ const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.ur
 describe('(a) a room dashboard never holds a floor-plan tile', () => {
   it('strips plan tiles, top level and nested, and keeps the title honest', () => {
     const gemini: SurfacePlan = { kind: 'room', title: 'Living room', tiles: [
-      { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'plan', boardId: 'room-plan', template: 'oneRoom' }] },
+      { type: 'card', title: 'Lights', children: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'plan', boardId: 'room-plan', template: 'blank' }] },
       { type: 'music', deviceId: 'speaker-a', label: 'Speaker' },
-      { type: 'plan', boardId: 'room-plan', template: 'oneRoom' },
+      { type: 'plan', boardId: 'room-plan', template: 'blank' },
     ] };
     expect(roomSummary(gemini)).toMatch(/a room plan/);
     const out = roomWithoutPlanTiles(gemini);
@@ -23,10 +23,10 @@ describe('(a) a room dashboard never holds a floor-plan tile', () => {
     // nothing to strip → the same object; a floor-plan board keeps its plan
     const lamps: SurfacePlan = { kind: 'room', title: 'r', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] };
     expect(roomWithoutPlanTiles(lamps)).toBe(lamps);
-    const fp: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] };
+    const fp: SurfacePlan = { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'blank' }] };
     expect(roomWithoutPlanTiles(fp)).toBe(fp);
     // a room of only a plan tile offers Connect instead
-    expect(roomWithoutPlanTiles({ kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'studio' }] }).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
+    expect(roomWithoutPlanTiles({ kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'blank' }] }).tiles).toEqual([{ type: 'connect', label: 'Connect a device' }]);
   });
   it('every board, review and title goes through the strip; the goals no longer ask for a plan tile', () => {
     expect(app).toContain('const fitPlan = (plan: SurfacePlan, frameId?: string): SurfacePlan => roomWithoutPlanTiles(frameId && receivedFrames.has(frameId) ? plan : fitLampTiles(plan, lampSlots()));');
@@ -45,7 +45,7 @@ describe('(b) "draw the floor plan" goes to its own board', () => {
     expect(floorPlanTarget({ frames, surfaces, from: null })).toEqual({ id: null, make: true });
   });
   it('focuses the existing floor-plan board', () => {
-    const s2 = { ...surfaces, fp: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'fp-cad', template: 'studio' }] } as SurfacePlan };
+    const s2 = { ...surfaces, fp: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'fp-cad', template: 'blank' }] } as SurfacePlan };
     expect(floorPlanTarget({ frames: [...frames, { id: 'fp', title: FLOOR_PLAN_TITLE }], surfaces: s2, from: 'dash' })).toEqual({ id: 'fp', existing: true });
   });
   it('voice, chip and the empty-board button all use it', () => {
@@ -128,12 +128,12 @@ describe('review fixes: honest rows over time', () => {
 describe('review fixes: saved boards from before the floor plan had its own board', () => {
   it('a legacy dashboard\'s plan tile and drawing move to a new "Floor plan" board', () => {
     const surfaces: Record<string, SurfacePlan> = {
-      f1: { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'card', title: 'Plan', children: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] }] },
+      f1: { kind: 'room', title: 'Living room', tiles: [{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }, { type: 'card', title: 'Plan', children: [{ type: 'plan', boardId: 'f1-cad', template: 'blank' }] }] },
     };
     const drawings: Record<string, Record<string, unknown>> = { f1: { 'f1-cad': { walls: [1, 2, 3] } } };
     const changed = liftLegacyPlanTiles([{ id: 'f1' }], surfaces, drawings, () => 'f2');
     expect(changed.sort()).toEqual(['f1', 'f2']);
-    expect(surfaces.f2).toEqual({ kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'studio' }] });
+    expect(surfaces.f2).toEqual({ kind: 'plan', title: FLOOR_PLAN_TITLE, tiles: [{ type: 'plan', boardId: 'f1-cad', template: 'blank' }] });
     expect(JSON.stringify(surfaces.f1)).not.toContain('"plan"');
     expect(surfaces.f1.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
     expect(drawings).toEqual({ f2: { 'f1-cad': { walls: [1, 2, 3] } } });
@@ -142,13 +142,13 @@ describe('review fixes: saved boards from before the floor plan had its own boar
   });
   it('an existing floor-plan board is kept; a full canvas leaves the board as saved', () => {
     const surfaces: Record<string, SurfacePlan> = {
-      f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'oneRoom' }, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] },
-      f9: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f9-cad', template: 'studio' }] },
+      f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'blank' }, { type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }] },
+      f9: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId: 'f9-cad', template: 'blank' }] },
     };
     liftLegacyPlanTiles([{ id: 'f1' }, { id: 'f9' }], surfaces, {}, () => { throw new Error('no new board needed'); });
-    expect(surfaces.f9.tiles).toEqual([{ type: 'plan', boardId: 'f9-cad', template: 'studio' }]);
+    expect(surfaces.f9.tiles).toEqual([{ type: 'plan', boardId: 'f9-cad', template: 'blank' }]);
     expect(surfaces.f1.tiles).toEqual([{ type: 'lamp', deviceId: 'wiz-lamp-1', label: 'Lamp' }]);
-    const full: Record<string, SurfacePlan> = { f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'oneRoom' }] } };
+    const full: Record<string, SurfacePlan> = { f1: { kind: 'room', title: 'r', tiles: [{ type: 'plan', boardId: 'x', template: 'blank' }] } };
     expect(liftLegacyPlanTiles([{ id: 'f1' }], full, {}, () => null)).toEqual([]);
     expect(full.f1.tiles[0].type).toBe('plan');
   });

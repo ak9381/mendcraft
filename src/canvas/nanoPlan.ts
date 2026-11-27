@@ -1,8 +1,7 @@
 // The on-device (Nano) board turn: ONE short prompt, ONE tiny structured
 // reply. On a laptop Nano writes about 20 characters a second, so the time a
 // turn takes is the length of its reply. Nano therefore only DECIDES — which
-// devices go on the board and what to call it, or which floor-plan template —
-// and everything else (tile types, labels, the plan's board id, the Connect
+// devices go on the board and what to call it — and everything else (tile types, labels, the plan's board id, the Connect
 // button) is derived here from the device list. A full draft is ~60
 // characters instead of ~600.
 //
@@ -11,12 +10,16 @@
 // footnoted as such.
 //
 //   room:        {"t":"Study","d":["lamp-a","speaker-a"]}
-//   floor plan:  {"p":"twoBedroom"}
+//
+// Nano never draws a floor plan: a plan is geometry, which Gemini writes and
+// code checks (planGenerate.ts). A floor-plan ask here is refused.
 import { extractJson } from '../ai/cloudJson';
-import { coerceSurfacePlan, MAX_TILES, PLAN_TEMPLATES, type Coerced, type PlanTemplate, type SurfacePlan, type TileSpec } from './surfacePlan';
+import { coerceSurfacePlan, MAX_TILES, type Coerced, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { DeviceHint, PartialPlan, SurfaceRequest } from './aiTurn';
 
 export const NANO_CONNECT_LABEL = 'Connect a device';
+/** Why a Nano floor-plan reply is refused. */
+export const NANO_NO_PLAN = 'Nano does not draw floor plans; Gemini does';
 /** The most devices one Nano draft puts on a board. */
 export const NANO_MAX_DEVICES = 4;
 const TITLE_MAX = 24;
@@ -30,16 +33,12 @@ export const NANO_ROOM_SYSTEM = [
   '"t" is a title of at most 4 words. "d" lists the ids of the devices she asked for, taken only from the list, each once.',
   `At most ${NANO_MAX_DEVICES} ids. Nothing else: no labels, no status, no other keys.`,
 ].join('\n');
-export const NANO_PLAN_SYSTEM = [
-  'You choose a floor-plan template for a smart home canvas.',
-  `Reply with JSON only: {"p": template} where template is one of ${PLAN_TEMPLATES.join(', ')}.`,
-  'studio = one open room; oneRoom = a single room; twoBedroom = a flat with two bedrooms.',
-].join('\n');
 /** Kept for callers that only need "the Nano system prompt" (the room one). */
 export const NANO_SYSTEM_PROMPT = NANO_ROOM_SYSTEM;
 
 const PLAN_ASK = /\bfloor\s*plan\b|\bbedrooms?\b|\bstudio\b|\bblueprint\b|\b(draw|sketch|start|make)\b.*\b(plan|layout|flat|apartment|house)\b/i;
-/** Is this a floor-plan ask (the caller's `want` wins; else her words)? */
+/** Is this a floor-plan ask (the caller's `want` wins; else her words)?
+ *  Nano refuses these: floor plans are Gemini's (planGenerate.ts). */
 export function nanoWantsPlan(req: SurfaceRequest): boolean {
   if (req.want) return req.want === 'plan';
   return PLAN_ASK.test(req.utterance);
@@ -68,13 +67,7 @@ export function unsupportedConstraintKeywords(schema: unknown, path = '$'): stri
 }
 
 /** The JSON schema Chrome's Prompt API enforces (`responseConstraint`). */
-export function nanoPlanConstraint(devices: DeviceHint[], plan = false): Record<string, unknown> {
-  if (plan) {
-    return {
-      type: 'object', additionalProperties: false, required: ['p'],
-      properties: { p: { type: 'string', enum: [...PLAN_TEMPLATES] } },
-    };
-  }
+export function nanoPlanConstraint(devices: DeviceHint[]): Record<string, unknown> {
   const ids = devices.map((d) => d.id);
   const title = { type: 'string', maxLength: TITLE_MAX };
   if (!ids.length) return { type: 'object', additionalProperties: false, required: ['t'], properties: { t: title } };
@@ -98,20 +91,18 @@ export interface NanoPlanRequest {
   /** This turn only. */
   user: string;
   constraint: Record<string, unknown>;
-  /** A floor-plan ask (reply is {"p": template}). */
+  /** A floor-plan ask: Nano does not draw plans, and its reply is refused. */
   plan: boolean;
 }
 
 export function buildNanoPlanRequest(req: SurfaceRequest): NanoPlanRequest {
   const plan = nanoWantsPlan(req);
-  const system = plan ? NANO_PLAN_SYSTEM : NANO_ROOM_SYSTEM;
-  const user = plan
-    ? `She said: "${req.utterance}"`
-    : [
-        `Devices:\n${req.devices.map((d) => `${d.id} = ${d.label} (${d.kind})`).join('\n') || 'none yet'}`,
-        `She said: "${req.utterance}"`,
-      ].join('\n');
-  return { prompt: `${system}\n${user}`, system, user, constraint: nanoPlanConstraint(req.devices, plan), plan };
+  const system = NANO_ROOM_SYSTEM;
+  const user = [
+    `Devices:\n${req.devices.map((d) => `${d.id} = ${d.label} (${d.kind})`).join('\n') || 'none yet'}`,
+    `She said: "${req.utterance}"`,
+  ].join('\n');
+  return { prompt: `${system}\n${user}`, system, user, constraint: nanoPlanConstraint(req.devices), plan };
 }
 
 /** The follow-up when the first reply was refused: short, and says why. */
@@ -135,9 +126,6 @@ const deviceTile = (d: DeviceHint): TileSpec => (d.kind === 'gimbal'
   ? { type: 'gimbal', label: d.label }
   : { type: tileTypeFor(d.kind), deviceId: d.id, label: d.label });
 
-const wantsTwoBedrooms = (s: string): boolean => /\b(two|2)[\s-]*(bed|bedroom)/i.test(s);
-const wantsStudio = (s: string): boolean => /\bstudio\b/i.test(s);
-
 function cleanTitle(raw: unknown, fallback: string): string {
   if (typeof raw !== 'string') return fallback;
   const words = raw.replace(/[<>]/g, '').trim().split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
@@ -151,14 +139,7 @@ export function expandNanoPlan(raw: unknown, req: SurfaceRequest): { raw: unknow
   const notes: string[] = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { raw, notes, error: 'The reply was not a board plan.' };
   const r = raw as Record<string, unknown>;
-  if (nanoWantsPlan(req)) {
-    const given = PLAN_TEMPLATES.includes(r.p as PlanTemplate) ? (r.p as PlanTemplate) : null;
-    // Her own words decide when she named the shape; else Nano's pick.
-    const template: PlanTemplate | null = wantsTwoBedrooms(req.utterance) ? 'twoBedroom' : wantsStudio(req.utterance) ? 'studio' : given;
-    if (!template) return { raw, notes, error: 'no floor-plan template chosen' };
-    const boardId = req.frameId ? `${req.frameId}-cad` : 'room-plan';
-    return { raw: { kind: 'plan', title: 'Floor plan', tiles: [{ type: 'plan', boardId, template }] }, notes };
-  }
+  if (nanoWantsPlan(req)) return { raw, notes, error: NANO_NO_PLAN };
   const title = cleanTitle(r.t, req.frameTitle || 'This room');
   if (!req.devices.length) return { raw: { kind: 'room', title, tiles: [{ type: 'connect', label: NANO_CONNECT_LABEL }] }, notes };
   if (!Array.isArray(r.d)) return { raw, notes, error: 'no device list in the reply' };
@@ -189,19 +170,11 @@ export function parseNanoPlan(text: string, req: SurfaceRequest): Coerced<Surfac
 }
 
 /** The ghost preview while Nano is still writing: a tile for every device id
- *  that has fully arrived (and the plan tile the moment its template has), so
+ *  that has fully arrived, so
  *  she sees the board form id by id instead of waiting for the closing brace. */
 export function partialNanoPlan(text: string, req: SurfaceRequest): PartialPlan {
   const out: PartialPlan = { tiles: [], rejected: 0 };
-  if (nanoWantsPlan(req)) {
-    out.kind = 'plan';
-    out.title = 'Floor plan';
-    const p = /"p"\s*:\s*"([A-Za-z]+)"/.exec(text);
-    if (p && PLAN_TEMPLATES.includes(p[1] as PlanTemplate)) {
-      out.tiles = [{ type: 'plan', boardId: req.frameId ? `${req.frameId}-cad` : 'room-plan', template: p[1] as PlanTemplate }];
-    }
-    return out;
-  }
+  if (nanoWantsPlan(req)) { out.kind = 'plan'; out.title = 'Floor plan'; return out; }
   out.kind = 'room';
   const t = /"t"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
   if (t) out.title = cleanTitle(t[1], req.frameTitle || 'This room');

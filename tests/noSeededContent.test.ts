@@ -16,12 +16,13 @@ export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRI
   // Task 5: the gimbal and the switch are generated DeviceTiles; nothing adds the gimbal by itself.
   /\bGimbalTileElement\b/, /\bGimbalTileApi\b/, /\bSwitchTileElement\b/, /\bSwitchTileApi\b/,
   /\bGIMBAL_MODE_BUTTONS\b/, /\bGIMBAL_CUE_BUTTONS\b/, /\bisAddGimbal\b/, /\bwithGimbalTile\b/,
-  /\baddGimbalTile\b/, /\bgimbalReported\b/, /\baddGimbal\b/];
+  /\baddGimbalTile\b/, /\bgimbalReported\b/, /\baddGimbal\b/,
+  // Task 7: floor plans are generated; the only plan template is blank.
+  /\btwoBedroom\b/, /\boneRoom\b/];
 
 /** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
 const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [
   { file: /^landing\//, re: /Living room|Desk lamp/, why: "main's marketing landing page, not the canvas" },
-  { file: /^plan\/templates\.ts$/, re: /Living room/, why: 'the floor-plan templates, stripped to blank in Task 7' },
   { file: /^plan\/ai\.ts$/, re: /Living room/, why: "a room name in the plan prompt's JSON format example" },
 ];
 

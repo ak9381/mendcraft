@@ -8,7 +8,9 @@ import type { DeviceClass } from './deviceGuard';
 export const PROTOCOL = 'v0.9' as const;
 export const ROOM_CATALOG_ID = 'https://mendcraft.web.app/catalogs/smart-canvas/v0.json';
 export const MAX_TILES = 6;
-export const PLAN_TEMPLATES = ['studio', 'oneRoom', 'twoBedroom'] as const;
+/** A plan tile always mounts blank: its drawing is generated and stored beside
+ *  the board (planDocs.ts), never chosen from templates in the code. */
+export const PLAN_TEMPLATES = ['blank'] as const;
 export type PlanTemplate = (typeof PLAN_TEMPLATES)[number];
 
 /** Caps on the *nested* part of a plan: top-level tiles are still capped at
@@ -233,7 +235,7 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   }
   if (o.type === 'plan') {
     const boardId = typeof o.boardId === 'string' && ID_RE.test(o.boardId) ? o.boardId : 'plan-1';
-    const template = (PLAN_TEMPLATES as readonly string[]).includes(String(o.template)) ? (o.template as PlanTemplate) : 'studio';
+    const template = (PLAN_TEMPLATES as readonly string[]).includes(String(o.template)) ? (o.template as PlanTemplate) : 'blank';
     return { ok: true, value: { type: 'plan', boardId, template } };
   }
   if (o.type === 'scene') {

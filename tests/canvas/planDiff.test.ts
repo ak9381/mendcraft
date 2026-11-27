@@ -6,8 +6,8 @@ import { mapKindToTile, mergeTiles } from '../../src/canvas/connectTurns';
 // Recorded-reply-shaped plans (src/ holds no replies) — the kind of plans a
 // review shows for a draft, its improvement and a floor plan.
 const NANO_ROOM = '{"kind":"room","title":"This room","tiles":[{"type":"lamp","deviceId":"lamp-a","label":"Desk lamp"},{"type":"lamp","deviceId":"lamp-b","label":"Ceiling light"}]}';
-const GEMINI_ROOM = '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"lamp-b","label":"Main light"},{"type":"lamp","deviceId":"lamp-a","label":"Reading lamp"},{"type":"music","deviceId":"speaker-a","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"oneRoom"},{"type":"connect","label":"Connect a device"}]}';
-const NANO_PLAN = '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"twoBedroom"}]}';
+const GEMINI_ROOM = '{"kind":"room","title":"Living room","tiles":[{"type":"lamp","deviceId":"lamp-b","label":"Main light"},{"type":"lamp","deviceId":"lamp-a","label":"Reading lamp"},{"type":"music","deviceId":"speaker-a","label":"Speaker"},{"type":"plan","boardId":"room-plan","template":"blank"},{"type":"connect","label":"Connect a device"}]}';
+const NANO_PLAN = '{"kind":"plan","title":"Floor plan","tiles":[{"type":"plan","boardId":"BOARD-cad","template":"blank"}]}';
 
 function plan(json: string): SurfacePlan {
   const c = coerceSurfacePlan(JSON.parse(json));
@@ -31,18 +31,18 @@ describe('diffPlans — the review window’s plan list', () => {
     expect(changes).toContainEqual({ op: 'change', label: 'Ceiling light', detail: 'renamed to Main light' });
     expect(changes).toContainEqual({ op: 'change', label: 'Desk lamp', detail: 'renamed to Reading lamp' });
     expect(changes).toContainEqual({ op: 'add', label: 'Speaker', detail: 'music · currently Morning light' });
-    expect(changes).toContainEqual({ op: 'add', label: 'Room plan', detail: '1 room (Room)' });
+    expect(changes).toContainEqual({ op: 'add', label: 'Room plan', detail: 'floor plan' });
     expect(changes).toContainEqual({ op: 'add', label: 'Connect a device', detail: 'button' });
     expect(changes.some((c) => c.op === 'remove')).toBe(false);
   });
 
-  it('floor plan: rooms and doors in plain words', () => {
+  // A plan tile's drawing is not in the surface plan (it is stored beside
+  // the board), so a board review names the tile only; a generated plan's own
+  // review lists its rooms (planGenerateChanges).
+  it('floor plan: the tile is named, its drawing is not in the board', () => {
     const changes = diffPlans(null, plan(NANO_PLAN));
-    expect(changes[1]).toEqual({
-      op: 'add', label: 'Floor plan',
-      detail: '5 rooms (Bedroom 1, Bedroom 2, Living room, Kitchen, Bathroom) · 5 doors · 5 windows',
-    });
-    expect(floorPlanSummary('studio')).toBe('1 room (Studio) · 1 door · 1 window');
+    expect(changes[1]).toEqual({ op: 'add', label: 'Floor plan', detail: 'floor plan' });
+    expect(floorPlanSummary('blank')).toBe('floor plan');
   });
 
   it('point-to-connect: only the one new lamp is added', () => {

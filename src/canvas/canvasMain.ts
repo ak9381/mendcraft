@@ -222,28 +222,32 @@ function reservedFrameIds(): string[] {
   for (const a of loaded.ok) if (keepIds.has(a.id) && a.kind === 'plan') { const f = (a.data as { frameId?: unknown }).frameId; if (typeof f === 'string') ids.add(f); }
   return [...ids];
 }
-/** Who made a change: her own (hand edits, renames) unless the last kept
- *  history entry for that board says an engine; a replayed reply is 'replay'. */
+/** Who made what an artifact shows now. A board this phone received keeps
+ *  the laptop's maker until she edits it here. Then this session's own
+ *  change (canvasApp makerOf: hers → 'person', a model's → that engine, a
+ *  replayed reply → 'replay'; a drawing has its own maker, so her hand edit
+ *  to a generated plan makes the drawing hers and leaves the board the
+ *  engine's). With no change this session — an app-made re-fit, such as a
+ *  lamp tile re-bound after a reload — the stored maker stands. */
 function artifactMaker(id: string): ArtifactBy {
   const frameId = frameIdOfArtifactId(id);
-  // A board this phone received keeps its maker on the laptop until she edits it here.
   const received = frameId ? handle?.receivedBy(frameId) : undefined;
   if (received) return received;
-  const last = frameId ? handle?.history().filter((h) => h.frameId === frameId && !h.undone).at(-1) : undefined;
-  if (!last || last.by === 'her') return 'person';
-  return replayOn ? 'replay' : last.by;
+  const made = handle?.makerOf(id);
+  if (made) return made === 'person' ? 'person' : replayOn ? 'replay' : made;
+  return artifacts.find((a) => a.id === id)?.by ?? 'person';
 }
 /** Who made the board on a frame, as the next save would record it: the
  *  stored artifact's maker while its content is unchanged, else the maker of
  *  this session's change. Undefined for a board nobody made (never stored, no
- *  history): such a board is not sent to a phone. */
+ *  change this session): such a board is not sent to a phone. */
 function boardMaker(frameId: string): ArtifactBy | undefined {
   const id = `board-${frameId}`;
   const plan = handle?.snapshot().surfaces[frameId];
   if (!plan) return undefined;
   const stored = artifacts.find((a) => a.id === id);
   if (stored && JSON.stringify((stored.data as { plan?: unknown }).plan) === JSON.stringify(plan)) return stored.by;
-  const touched = !!handle?.receivedBy(frameId) || !!handle?.history().some((h) => h.frameId === frameId && !h.undone);
+  const touched = !!handle?.receivedBy(frameId) || !!handle?.makerOf(id) || !!stored;
   return touched ? artifactMaker(id) : undefined;
 }
 /** Every save: the layout now, the changed artifacts without waiting. */
@@ -266,6 +270,7 @@ handle = mountCanvas(root, {
   doc: startDoc,
   onPersist: persistDoc,
   artifactBy: boardMaker,
+  storedMakers: Object.fromEntries(artifacts.filter((a) => a.kind === 'board').map((a) => [a.id.slice('board-'.length), a.by])),
   // Lamp connectors she approved (each checked again at load, in loadArtifacts).
   connectors: artifacts.filter((a) => a.kind === 'connector'),
   onConnector: (a) => {

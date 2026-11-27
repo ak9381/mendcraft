@@ -71,7 +71,7 @@ export function draftSummary(plan: SurfacePlan): string {
   const c = countTiles(plan);
   const devices = devicePhrase(c);
   if (devices) return `Draft: ${devices} found in this room`;
-  if (c.hasPlan) return floorPlanSummary(plan);
+  if (c.hasPlan) return 'Floor plan';
   if (c.hasConnect) return 'Draft: no devices found yet — a Connect tile is ready';
   return `Draft: ${n(c.leaves, 'tile')} for this room`;
 }
@@ -96,19 +96,9 @@ export function roomSummary(plan: SurfacePlan): string {
   return betterSummary(plan).replace(/^Better: /, 'This room: ');
 }
 
-const TEMPLATE_WORDS: Record<string, string> = { studio: 'a studio', oneRoom: 'one room', twoBedroom: 'two bedrooms' };
-
-export function floorPlanSummary(plan: SurfacePlan): string {
-  let template: string | null = null;
-  const walk = (tiles: TileSpec[]): void => {
-    for (const t of tiles) {
-      if (template) return;
-      if (t.type === 'plan') template = t.template;
-      else { const kids = childrenOf(t); if (kids) walk(kids); }
-    }
-  };
-  walk(plan.tiles);
-  return template ? `Floor plan: ${TEMPLATE_WORDS[template] ?? template}` : 'Floor plan';
+/** The review title of a generated floor plan: how many rooms it draws. */
+export function floorPlanSummary(rooms: readonly { name: string }[]): string {
+  return rooms.length ? `Floor plan: ${n(rooms.length, 'room')}` : 'Floor plan';
 }
 
 /** The terminal's done line: the tiles she will actually see, counted through
