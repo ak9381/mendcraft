@@ -1529,8 +1529,42 @@ async function recordmode(page) {
 }
 SECTIONS.recordmode = recordmode;
 
+/** L1: the right control dock (hand cluster) never covers the focused board,
+ *  whether the AI activity panel opens by itself (a turn that fails) or is
+ *  pinned ("show ai"). Seen live at 1550×656. */
+const coverage = () => {
+  const box = (e) => e.getBoundingClientRect();
+  const f = document.querySelector('.mc-frame'); if (!f) return null;
+  const fr = box(f);
+  const hits = [...document.querySelector('.mc-hand-cluster').children].filter((k) => k.offsetWidth && k.offsetHeight).map(box)
+    .filter((r) => r.left < fr.right && r.right > fr.left && r.top < fr.bottom && r.bottom > fr.top);
+  return { ai: !document.querySelector('.mc-ai').hidden, pinned: document.querySelector('.mc-canvas').classList.contains('is-ai-pinned'), frameRight: Math.round(fr.right), hits: hits.map((r) => Math.round(r.left)) };
+};
+async function layout(page) {
+  await page.setViewport({ width: 1550, height: 656 });
+  // No replies at all: the turn below fails, and a failure opens the panel by itself.
+  await page.evaluateOnNewDocument(() => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), replies: {}, recorded: {} }; });
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate((a) => window.__mcArtifacts.put(a), VALID_BOARD);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await page.evaluate(() => { void window.__mcCanvas.focus(window.__mcCanvas.frames()[0].id); });
+  await sleep(1500);
+  const base = await page.evaluate(coverage);
+  check(base && !base.ai && base.hits.length === 0, `1550×656: the dock clears the focused board (got ${JSON.stringify(base)})`);
+  await page.evaluate(() => { window.__mcCanvas.run('make a dashboard for my garden'); });
+  if (!(await waitFor(page, () => !document.querySelector('.mc-ai').hidden, 15_000, 'the AI activity panel opens by itself'))) return;
+  await sleep(1500);
+  const auto = await page.evaluate(coverage);
+  check(auto && auto.ai && !auto.pinned && auto.hits.length === 0, `AI panel open (unpinned): the dock covers none of the board (got ${JSON.stringify(auto)})`);
+  await page.evaluate(() => { window.__mcCanvas.run('show ai'); });
+  await sleep(1500);
+  const pinned = await page.evaluate(coverage);
+  check(pinned && pinned.ai && pinned.pinned && pinned.hits.length === 0, `AI panel pinned: the dock covers none of the board (got ${JSON.stringify(pinned)})`);
+}
+SECTIONS.layout = layout;
+
 /** Journey order (spec §10); the whole journey, on one page, last. */
-const ORDER = ['boot', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'recordmode', 'journey'];
+const ORDER = ['boot', 'layout', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'recordmode', 'journey'];
 
 async function main() {
   const unordered = Object.keys(SECTIONS).filter((n) => !ORDER.includes(n));
