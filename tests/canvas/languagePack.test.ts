@@ -40,9 +40,9 @@ describe('coerceLanguagePack', () => {
 
   it('drops a markup phrase but keeps the good ones', () => {
     const intent = Object.keys(SCRIPTED_KN_PACK.phrases)[0];
-    const r = coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { [intent]: ['<b>x</b>', 'ಆನ್'] } });
+    const r = coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: { [intent]: ['<b>x</b>', 'ದೀಪ ಬೆಳಗು'] } });
     expect(r.ok).toBe(true);
-    if (r.ok) expect((r.value.phrases as Record<string, string[]>)[intent]).toEqual(['ಆನ್']);
+    if (r.ok) expect((r.value.phrases as Record<string, string[]>)[intent]).toEqual(['ದೀಪ ಬೆಳಗು']);
   });
 
   it('rejects a string longer than 80 chars', () => {

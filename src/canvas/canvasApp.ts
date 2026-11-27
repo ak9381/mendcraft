@@ -25,6 +25,7 @@ import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
 import { guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
+import { OFFLINE_CHAT_FAIL_LINE, OFFLINE_CHAT_LINE, OFFLINE_FIX_LINE, OFFLINE_POINT_LINE, OfflineError, chatEngines } from './offlineGate';
 import { PLAN_EDIT_FAIL, runPlanEditTurn, simPlanEdit, planRooms } from './planEdit';
 import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
@@ -80,7 +81,7 @@ import { createCanvasLedger, formatBytesShort, ledgerPanelLines, utf8ByteLength 
 import { betterSummary, roomSummary, draftSummary, floorPlanSummary, floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomWithoutPlanTiles, tilesFilledLine } from './planTruth';
 import { createCanvasHandsAdapter, mountCanvasHands, shouldAutoStartHands, type CanvasHandsHandle } from './canvasHands';
 import {
-  SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, replayInputFor, storeOwner,
+  SCAN_DEFAULTS, SCAN_SIM, createScanFlow, loadOwner, ownerHandsOf, registerButtonLabel, registeredChip, registeredLine, replayInputFor, storeOwner,
   type OwnerRecord,
 } from './scanRegistration';
 import { mountScanPanel } from './scanPanel';
@@ -3301,6 +3302,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (how.remote) sendBack({ ok: false, reason: 'no-frame', message: 'The iPhone couldn’t get a camera frame.' });
       return;
     }
+    // Identifying can send the photo to Gemini: offline, nothing leaves (final review A2).
+    if (!net.isOnline()) {
+      say(OFFLINE_POINT_LINE, { speak: true });
+      if (how.remote) sendBack({ ok: false, reason: 'unidentified', message: OFFLINE_POINT_LINE });
+      return;
+    }
     say('Got it — looking at what you pointed at…');
     const hint = pointer ? { pointer } : undefined;
     const trace: VisionTrace = { cloudSends: 0 };
@@ -3779,7 +3786,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     showReview({
       title: 'Add Kannada', card, extra: buildReviewExtra(),
-      changes: languagePackChanges('Kannada', swapCount),
+      changes: languagePackChanges('Kannada', swapCount, Object.fromEntries(Object.entries(next.phrases).map(([k, v]) => [INTENT_ENGLISH[k as IntentKey] ?? k, v]))),
       facts: reviewFacts(knSent, utterance),
     }, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });
   }
@@ -4191,9 +4198,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // In ?sim=1 there is no real face to re-acquire — the stored owner and the
     // chip are the demo; locking presence would only flap to "paused".
     if (!opts.sim) applyOwnerLock(owner);
-    setRegChip('Registered');
+    setRegChip(registeredChip(!!opts.sim));
     refreshRegisterLabels();
-    say('Registered. Tracking is locked to you.', { speak: true });
+    say(registeredLine(!!opts.sim), { speak: true });
     setTimeout(() => closeScan(), 900); // leave the ✓ on screen for a beat
   }
   // Teach / custom-gestures share the same full-screen z-index tier as the
@@ -4715,8 +4722,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const OPEN_ENDED_SIM_REPLY = "I'm listening — tell me what to build, or ask me anything.";
   async function openEndedTurn(text: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
-    const nano = engineFor('nano', OPEN_ENDED_SIM_REPLY);
-    const gemini = engineFor('gemini', OPEN_ENDED_SIM_REPLY);
+    // Offline (real or simulated): Nano on this device only, never the cloud.
+    const offline = !net.isOnline();
+    const gate = chatEngines(!offline, engineFor('nano', OPEN_ENDED_SIM_REPLY), engineFor('gemini', OPEN_ENDED_SIM_REPLY));
+    if (!gate) {
+      aiPanel.querySelector('.mc-ai-state')!.textContent = OFFLINE_CHAT_LINE;
+      say(OFFLINE_CHAT_LINE, { speak: true });
+      return;
+    }
+    const { nano, gemini } = gate;
     // Each engine really tried goes through the ledger like any AI turn. A
     // cloud one (Gemini — including the "Nano" step on a device without Nano)
     // only ever gets the redacted prompt, and its bytes are booked.
@@ -4753,6 +4767,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         live.update(safe);
       }, prepare);
     } catch (e) {
+      if (e instanceof OfflineError) {
+        panels.forEngine('nano').fail(OFFLINE_CHAT_FAIL_LINE);
+        aiPanel.querySelector('.mc-ai-state')!.textContent = OFFLINE_CHAT_FAIL_LINE; say(OFFLINE_CHAT_FAIL_LINE, { speak: true });
+        settleEngines(); autoHideAi();
+        return;
+      }
       const why = `No answer. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
@@ -5687,6 +5707,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           tileId: target.id,
           log: tileSelfCheckLog,
           requestFix: async (prompt) => {
+            // The fix is a Gemini call: offline, nothing is sent (final review A2).
+            if (!net.isOnline()) { tileSelfCheckLog('gemini', 'note', `self-check: ${OFFLINE_FIX_LINE}`); throw new OfflineError(); }
             const eng = engineFor('gemini', scriptedFixJson(target.spec));
             const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
             const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
@@ -5803,6 +5825,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     plan: (fid) => surfaces[fid] ?? null,
     disabled: morphDisabled,
     engine: (json) => engineFor('gemini', json),
+    offline: () => !net.isOnline(),
     deviceIdSession,
     sim: opts.sim,
     mic: {
@@ -5929,7 +5952,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   updateDock();
   refreshRegisterLabels();
   showArrangeStrip();
-  if (loadOwner(regStorage)) setRegChip('Registered'); // survives a reload within the session
+  if (loadOwner(regStorage)) setRegChip(registeredChip(!!opts.sim)); // survives a reload within the session
   if (phoneShell) {
     if (focusId) stampMorphTiles(focusId);
     applyEditLock();

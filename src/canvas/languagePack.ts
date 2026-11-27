@@ -94,6 +94,12 @@ export const SCRIPTED_KN_PACK: LanguagePack = {
   },
 };
 
+/** Intents that answer a review: their phrases come from the built-in pack only. */
+const BUILTIN_ONLY: ReadonlySet<IntentKey> = new Set<IntentKey>(['keep', 'drop']);
+/** A model-written phrase shorter than this (letters and marks) is dropped. */
+export const MIN_PHRASE = 4;
+const phraseLength = (v: string): number => (normMulti(v).replace(/\s+/g, '').match(/[\p{L}\p{M}\p{N}]/gu) ?? []).length;
+
 function okString(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && v.length <= MAX_STRING && !/[<>]/.test(v) && KANNADA.test(v);
 }
@@ -124,9 +130,20 @@ export function coerceLanguagePack(raw: unknown): Coerced<LanguagePack> {
       // (live Gemini added an "ai" intent and the pack was refused).
       if (!INTENT_KEY_SET.has(intent)) continue;
       if (!Array.isArray(arr) || !arr.length) continue;
-      const good = arr.filter(okString);
-      if (good.length) phrases[intent as IntentKey] = good;
+      const key = intent as IntentKey;
+      const builtin = SCRIPTED_KN_PACK.phrases[key] ?? [];
+      // Final review A1: keep and drop answer a review, so only the built-in
+      // phrases may say them; a model-written one is never taken. Any other
+      // phrase must be long enough not to be a fragment of her words.
+      const good = BUILTIN_ONLY.has(key)
+        ? arr.filter((v): v is string => typeof v === 'string' && builtin.includes(v))
+        : arr.filter((v): v is string => okString(v) && (builtin.includes(v) || phraseLength(v) >= MIN_PHRASE));
+      if (good.length) phrases[key] = good;
     }
+  }
+  // A pack with spoken phrases keeps the built-in keep / drop words.
+  if (Object.keys(phrases).length) {
+    for (const k of BUILTIN_ONLY) if (!phrases[k] && SCRIPTED_KN_PACK.phrases[k]) phrases[k] = [...SCRIPTED_KN_PACK.phrases[k]!];
   }
   return { ok: true, value: { lang, strings, phrases } };
 }
@@ -158,22 +175,28 @@ export function statusText(k: StatusKey, pack: LanguagePack | null): string {
   return pack?.lang === 'kn' ? KN_STATUS[k] : EN_STATUS[k];
 }
 
-/** Script-aware normalize: keep letters/digits of any script, drop punctuation. */
+/** Script-aware normalize: keep letters, marks (Kannada vowel signs) and
+ *  digits of any script, drop punctuation. */
 function normMulti(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** A spoken phrase → the intent it routes to, or null. Longest phrases win so a
- *  specific sentence beats a word it contains. */
+/** Polite words that may stand around a phrase ("please", "ದಯವಿಟ್ಟು"). */
+const POLITE_WORDS = new Set(['please', 'ದಯವಿಟ್ಟು', 'ದಯಮಾಡಿ', 'ಈಗ', 'now', 'ok', 'okay', 'ಸರಿ']);
+
+/** A spoken phrase → the intent it routes to, or null. The whole line must BE
+ *  the phrase (a polite word around it is fine): a phrase inside a longer
+ *  sentence never fires (final review A1). */
 export function routePackPhrase(text: string, pack: LanguagePack): IntentKey | null {
-  const t = normMulti(text);
+  const words = normMulti(text).split(' ').filter(Boolean);
+  while (words.length && POLITE_WORDS.has(words[0])) words.shift();
+  while (words.length && POLITE_WORDS.has(words[words.length - 1])) words.pop();
+  const t = words.join(' ');
   if (!t) return null;
-  let best: { intent: IntentKey; len: number } | null = null;
   for (const intent of INTENT_KEYS) {
     for (const phrase of pack.phrases[intent] ?? []) {
-      const p = normMulti(phrase);
-      if (p && t.includes(p) && (!best || p.length > best.len)) best = { intent, len: p.length };
+      if (normMulti(phrase) === t) return intent;
     }
   }
-  return best?.intent ?? null;
+  return null;
 }

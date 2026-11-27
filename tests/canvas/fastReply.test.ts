@@ -308,7 +308,7 @@ describe('2. the reply is shown and spoken as it arrives', () => {
 describe('3. replies are short, so Nano finishes fast', () => {
   it('the instruction is one short line asking for one or two short sentences and no emoji', () => {
     const p = buildOpenEndedPrompt('hi how are you');
-    expect(p).toBe('You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will. One or two short, friendly sentences, plain words, no emoji.\nShe said: "hi how are you"');
+    expect(p).toBe('You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. In English: one or two short, kind sentences, no emoji.\nShe said: "hi how are you"');
     // every character is read before the first is written (the "chat only"
     // clause is the one addition: a reply must never promise an action —
     // nor a call, message, order, booking or reminder, which Nano did claim)

@@ -15,7 +15,7 @@ export function buildOpenEndedPrompt(text: string): string {
 }
 /** Chat can't act: it never touches a board, a device or the plan, so the
  *  model is told so — and promiseGuard() below catches it when it forgets. */
-export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will. One or two short, friendly sentences, plain words, no emoji.';
+export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. In English: one or two short, kind sentences, no emoji.';
 
 /** What replaces a reply that promised an action chat cannot do — a plan
  *  ask gets the plan's own way in; anything else, the board's buttons. */
@@ -144,6 +144,51 @@ const PAST_CLAIMS: RegExp[] = [
   // "Got it, the fan is off." — chat switched nothing.
   /(?:^|[.!?]\s*)(?:got\s+it|done|okay|ok|sure|there|all\s+set|alright)[,!.—\s]+(?:the|your)\s+(?:[\w'-]+\s+){0,3}(?:is|are)\s+(?:now\s+)?(?:on|off|set|booked|sent|done|locked|unlocked|playing|paused|muted)\b/i,
 ];
+// Final review sim-1 C1 (port of main): a plain past tense ("I turned the
+// lamp on"), a bare participle opener ("Turned the lamp on.", "Sure! Turning
+// the lamp on."), a state that changed ("The lamp is on now", "It's on now",
+// "Lamp on!") and "there's now …" are claims too — chat changed nothing.
+const APP_PAST = 'turned|switched|set|played|added|dimmed|brightened|paused|stopped|started|muted|unmuted|moved|removed|deleted|created|built|drew|drawn|placed|inserted|changed|updated|connected|disconnected|opened|closed|renamed|resized|widened|extended|enlarged|fixed|saved|undid|adjusted|lowered|raised|installed|recorded|put|warmed|cooled|heated|locked|unlocked|skipped|queued|restarted|resumed';
+const APP_GERUND = 'turning|switching|setting|playing|adding|dimming|brightening|pausing|stopping|starting|muting|unmuting|moving|removing|deleting|creating|building|drawing|placing|inserting|changing|updating|connecting|opening|closing|renaming|resizing|fixing|saving|undoing|adjusting|lowering|raising|putting|warming|cooling|heating|locking|unlocking|skipping|queueing|queuing|resuming';
+/** The board's things, without bare pronouns ("Playing it safe" is talk). */
+const THING = OBJ.replace(/^it\|that\|them\|/, '');
+const STATE = 'on|off|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|warmer|cooler|locked|unlocked|connected|disconnected|stopped|added|removed|set|ready';
+const S_START = String.raw`(?:^|[.!?,;:—–-]\s*)`;
+const S_END = String.raw`\s*(?:[.!…]|$)`;
+const STATE_CLAIMS: RegExp[] = [
+  // "I turned the lamp on", "I just dimmed the lights" — not "I set out…", "I changed my mind", "I turned 80".
+  new RegExp(String.raw`\bI\s+(?:just\s+|now\s+|already\s+|also\s+|quickly\s+)?(?:${APP_PAST})\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing)\b)`, 'i'),
+  // "I made the lamp brighter", "I got the lights on" — not "I made a mistake".
+  new RegExp(String.raw`\bI\s+(?:just\s+|now\s+|already\s+)?(?:made|got|left|kept|had)(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${THING})\b`, 'i'),
+  // "Turned the lamp on." / "Sure! Turning the lamp on." / "Playing your music."
+  new RegExp(String.raw`${S_START}(?:${APP_PAST}|${APP_GERUND})(?:\s+(?:on|off|up|down|in|out|back|over))?(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${THING})\b`, 'i'),
+  // "The lamp is on (now)", "Your lights are off now", "The lamp's on now", "Lamp is on."
+  new RegExp(String.raw`(?:\b(?:the|your|my)\s+(?:[\w’'-]+\s+){0,2}|${S_START})(?:${THING})\s*(?:is|are|['’]s|['’]re)\s+(?:now\s+|already\s+)?(?:${STATE})\b(?!\s*\?)`, 'i'),
+  // Any named thing that is "now" in a changed state: "The heater is on now", "The music is now playing".
+  new RegExp(String.raw`\b(?:the|your|my)\s+(?:[\w’'-]+\s+){1,3}?(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE})|(?:${STATE})\s+now)\b`, 'i'),
+  // "It's on now.", "It is on.", "They're off now." — the whole sentence, or with "now".
+  new RegExp(String.raw`${S_START}(?:it|they|everything|all|both)\s*(?:is|are|['’]s|['’]re)\s+(?:now\s+|already\s+|all\s+)?(?:${STATE})(?:\s+now|\s+for\s+you)?${S_END}`, 'i'),
+  new RegExp(String.raw`\b(?:it|they|everything)\s*(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE})|(?:${STATE})\s+now)\b`, 'i'),
+  // "Lamp on!", "Lights off." — a sentence that is only the new state.
+  new RegExp(String.raw`${S_START}(?:the\s+|your\s+)?(?:[\w’'-]+\s+)?(?:${THING})\s+(?:now\s+)?(?:${STATE})(?:\s+now)?${S_END}`, 'i'),
+  // "Okay, lamp turned on.", "Lights switched off for you."
+  new RegExp(String.raw`${S_START}(?:the\s+|your\s+)?(?:[\w’'-]+\s+)?(?:${THING})\s+(?:${APP_PAST})\b(?:\s+(?:on|off|up|down))?(?:\s+for\s+you)?${S_END}`, 'i'),
+  // "There's now a study next to bedroom 2."
+  new RegExp(String.raw`\bthere\s*(?:['’]s|\s+is|\s+are|['’]re)\s+now\s+(?:(?:${DET})\s+)*(?:[\w’'-]+\s+){0,2}(?:${THING})\b`, 'i'),
+  // "Done — …", "Done, the lamp is on", "Done: …"
+  /(?:^|[.!?]\s*)(?:all\s+)?done\s*[—–:,-]/i,
+];
+// The guard reads English. A claim in another Latin-script language is
+// caught by its own few words (no general foreign-word list: "AI helps."
+// must pass); a reply in another script cannot be read at all, see readable().
+const FOREIGN_CLAIMS = /\b(?:he|ha|hemos|has|j['’]ai|ai|avons|habe|hab|haben|ho|abbiamo|eu|já)\s+(?:\p{L}+\s+){0,3}?(?:encendid[oa]s?|apagad[oa]s?|puesto|añadido|cambiado|allumée?s?|éteinte?s?|ajoutée?s?|mise?|eingeschaltet|ausgeschaltet|angemacht|ausgemacht|hinzugefügt|acces[oa]|spent[oa]|aggiunt[oa]|liguei|desliguei|acendi|apaguei)(?!\p{L})|\b(?:está|están|est|sont|ist|sind|è|sono)\s+(?:ahora\s+|maintenant\s+|jetzt\s+|ora\s+)?(?:encendid[oa]s?|apagad[oa]s?|allumée?s?|éteinte?s?|an|aus|eingeschaltet|ausgeschaltet|acces[oa]|spent[oa])(?!\p{L})|\b(?:listo|hecho|fait|erledigt|fatto|pronto)\s*[,.!]/iu;
+/** True when the guard can read the reply: most of its letters are plain
+ *  Latin (a name restored in another script is fine). */
+export function readable(text: string): boolean {
+  const letters = String(text ?? '').match(/\p{L}/gu) ?? [];
+  if (!letters.length) return true;
+  return letters.filter((c) => /[A-Za-zÀ-ɏ]/.test(c)).length / letters.length >= 0.75;
+}
 /** A sentence that only shows her how to ask ("…if you say 'turn on the lamp'"). */
 const HOW_TO_ASK = /\bif\s+you\s+(?:say|ask|tell\s+me)\s*[,:]?\s*["“'‘]/i;
 /** The extra checks: true when any first-person claim of an action is in the text. */
@@ -171,6 +216,8 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
     if (i >= 0 && !/\byou\b/i.test(s.slice(0, i))) return true;
   }
   if (PAST_CLAIMS.some((re) => re.test(t))) return true;
+  if (STATE_CLAIMS.some((re) => re.test(t))) return true;
+  if (FOREIGN_CLAIMS.test(t)) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
@@ -186,11 +233,13 @@ export function promisesAction(reply: string, complete = true): boolean {
 /** The reply as it may be shown and spoken: an action promise is replaced
  *  by the honest line, everything else passes unchanged. */
 export function promiseGuard(reply: string, asked = ''): { reply: string; replaced: boolean } {
+  // A reply the guard cannot read is never passed on as it is.
+  if (!readable(reply)) return { reply: cantActLine(asked, reply), replaced: true };
   return promisesAction(reply) ? { reply: cantActLine(asked, reply), replaced: true } : { reply, replaced: false };
 }
 
 /** A clause that could still turn into a promise once its sentence ends. */
-const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b`, 'i');
+const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST}|made|got|left|kept|had)\b|\bthere\s*(?:['’]s|\s+is|\s+are)\s+now\b|(?:${THING})\s+(?:${STATE}|${APP_PAST})\b`, 'i');
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the
@@ -198,7 +247,11 @@ const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall
 export function guardSafePrefix(full: string): string | null {
   const t = String(full ?? '');
   // A word still being written ("I will b…") is not judged until it is whole.
-  if (promisesAction(t.replace(/[A-Za-z’'-]+$/, ''), false)) return null;
+  const whole = t.replace(/[\p{L}\p{M}’'-]+$/u, '');
+  // A reply the guard cannot read (another script) is held whole: the end
+  // of the turn decides (promiseGuard replaces it).
+  if (!readable(whole)) return '';
+  if (promisesAction(whole, false)) return null;
   const re = /[,.!?;:—…]+["'”’)\]]*(?=\s)/g;
   let out = 0;
   let clauseStart = 0;
