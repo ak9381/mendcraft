@@ -5,7 +5,8 @@
 // get their turn).
 import type { DeviceIntent } from './deviceActions';
 import { lampStep } from './deviceGuard';
-import { colourFromSpeech, sceneFromSpeech, tempStep } from './lampPresets';
+import { LAMP_COLOURS, colourFromSpeech, sceneFromSpeech, tempStep } from './lampPresets';
+import { WIZ_SCENES } from '../devices/wiz';
 import type { StatusKey } from './languagePack';
 
 export type DeviceKind = 'lamp' | 'music' | 'switch';
@@ -81,8 +82,10 @@ const REQUEST = /^(?:(?:please|hey|ok|okay|so|now)\s+)*(?:can|could|would|will) 
 const VERBS = new Set([
   'turn', 'switch', 'put', 'set', 'make', 'dim', 'brighten', 'lower', 'raise', 'increase', 'decrease', 'reduce', 'boost', 'cut',
   'play', 'pause', 'stop', 'resume', 'next', 'skip', 'previous', 'go', 'change', 'bring',
-  'louder', 'softer', 'quieter', 'brighter', 'dimmer', 'darker', 'lighter', 'warmer', 'cooler', 'warm', 'cool',
+  'louder', 'softer', 'quieter', 'brighter', 'dimmer', 'darker', 'lighter', 'warmer', 'cooler',
 ]);
+// (No bare "warm" / "cool": "cool", "ok cool", "warm welcome" are talk, not
+// orders. "warmer", "cooler" and "make it warm" still act.)
 const SHORT_HEADS = new Set(['lamp', 'lamps', 'light', 'lights', 'music', 'song', 'track', 'speaker', 'speakers', 'volume', 'everything', 'room']);
 const DETERMINERS = new Set(['the', 'my', 'our', 'all', 'both', 'every']);
 /** Question, negation, claim and tense words: their presence means "not an order". */
@@ -92,9 +95,34 @@ const REFUSE = new RegExp('\\b(?:' + [
   'how', 'why', 'what', 'whats', 'which', 'who', 'whos', 'when', 'where', 'wheres', 'whether', 'if',
   'tell me', 'say', 'already', 'think', 'remind', 'later', 'tomorrow', 'tonight',
   'turned', 'switched', 'dimmed', 'brightened', 'played', 'paused', 'stopped', 'went', 'got',
+  // A change of mind or a choice: "turn off the lamp no wait", "on or off";
+  // Kannada / Hindi in Latin letters: "lights off beda" (don't), "mat karo".
+  'wait', 'actually', 'or', 'either', 'beda', 'bedi', 'beku', 'maadbeda', 'mat', 'nahi', 'nahin', 'mathu',
   'tile', 'tiles', 'board', 'boards', 'card', 'cards', 'widget', 'widgets', 'button', 'buttons', 'control', 'controls',
   'slider', 'toggle', 'dashboard', 'canvas', 'note', 'notes', 'icon', 'chart', 'panel', 'page', 'story', 'picture', 'photo', 'image', 'label',
 ].join('|') + ')\\b');
+
+/** Every word a device order is made of. A line with any other word ("make
+ *  the TEXT lighter", "lower your VOICE", "lamp on FIRE", "play a GAME",
+ *  "turn on the lamp in an HOUR") is about something else and never acts; a
+ *  device's own label words are added per call. */
+const ORDER_WORDS = new Set<string>([
+  ...VERBS, ...SHORT_HEADS, ...DETERMINERS, ...COMMON,
+  'on', 'off', 'out', 'up', 'down', 'to', 'at', 'and', 'it', 'this', 'that', 'them', 'these', 'those', 'one',
+  'a', 'an', 'bit', 'little', 'more', 'lot', 'much', 'slightly', 'way', 'all', 'please', 'pls', 'now', 'right', 'again', 'back',
+  'percent', 'per', 'cent', 'brightness', 'bright', 'white', 'level', 'warm', 'cool', 'dim', 'brighten',
+  'music', 'song', 'songs', 'track', 'tracks', 'volume', 'sound', 'quiet', 'medium', 'loud', 'some', 'my', 'for', 'me',
+  'full', 'max', 'maximum', 'half', 'higher', 'high', 'low', 'scene', 'mode', 'colour', 'color',
+  'hey', 'hi', 'ok', 'okay', 'so', 'just', 'mendcraft', 'can', 'could', 'would', 'will', 'you', 'thanks', 'thank',
+  'playing', 'resume', 'last', 'go', 'previous', 'in', 'here', 'there', 'everything', 'room',
+  ...LAMP_COLOURS.flatMap((c) => norm(c.label).split(' ')), 'violet',
+  ...Object.values(WIZ_SCENES).flatMap((l) => norm(l).split(' ')), 'cosy', 'cozy', 'reading', 'study',
+]);
+/** Words that are not in ORDER_WORDS (numbers are fine: a level). */
+function strayWords(t: string, devices: readonly DeviceRef[]): string[] {
+  const label = new Set(devices.flatMap((d) => norm(d.label).split(' ')));
+  return t.split(' ').filter((w) => w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w));
+}
 
 /** True when the line has the shape of a device order: a leading command verb,
  *  or a short device phrase ("lamp on", "desk lamp 40 percent", "volume up"). */
@@ -111,6 +139,9 @@ export function isDeviceCommandShape(text: string, devices: readonly DeviceRef[]
   if (REFUSE.test(t)) return false;
   if (/\bright\s*$/.test(t)) return false; // "…, right"
   if (/\bstop \w+ing\b/.test(t)) return false; // "stop turning the lamp off"
+  if (strayWords(t, devices).length) return false;
+  // "turn on the lamp at 9": a time, not a level.
+  if (/\bat \d+\b/.test(t) && !/\d\s*(?:percent|per cent|%)/.test(raw)) return false;
   const words = t.replace(POLITE, '').replace(/\s+please$/, '').split(' ').filter(Boolean);
   if (!words.length) return false;
   if (VERBS.has(words[0])) return true;
@@ -119,13 +150,49 @@ export function isDeviceCommandShape(text: string, devices: readonly DeviceRef[]
   if (words.length > 6) return false;
   const labelWords = new Set(devices.flatMap((d) => norm(d.label).split(' ')).filter((w) => w && !COMMON.has(w)));
   const head = words.find((w) => !DETERMINERS.has(w));
-  return !!head && (SHORT_HEADS.has(head) || labelWords.has(head));
+  if (!head || !(SHORT_HEADS.has(head) || labelWords.has(head))) return false;
+  // "the lamps on" is "the lamp's on" heard without its apostrophe: a report.
+  if (/^the \w+s (?:on|off|out)$/.test(words.join(' '))) return false;
+  // A short phrase ends at its state: "lamp on", "desk lamp 40 percent",
+  // "volume up" — never "lamp on my desk", "room on the left".
+  return /(?:\b(?:on|off|out|up|down|brighter|dimmer|darker|lighter|warmer|cooler|louder|softer|quieter|percent|cent|quiet|medium|loud|full|max|half)|\d)$/.test(words.join(' '))
+    || (!!(colourFromSpeech(words.join(' ')) || sceneFromSpeech(words.join(' '))) && words.length <= 4);
+}
+
+/** "turn the desk lamp on and the bedroom lamp off": clauses, each with its own
+ *  state. Null when the line is one clause (an "and" between two lamps). */
+function clauses(t: string): string[] | null {
+  const parts = t.split(/\s+(?:and|then)\s+(?:then\s+)?/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const stated = (p: string) => /\b(?:on|off|out|up|down|brighter|dimmer|darker|lighter|warmer|cooler|louder|softer|quieter|percent|play|pause|stop|resume|next|skip|previous|dim|brighten)\b|\d\s*%/.test(p);
+  return parts.every(stated) ? parts : null;
 }
 
 export function parseDeviceCommands(text: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
   if (!isDeviceCommandShape(text, devices)) return null;
+  // Two clauses, two states: each is done to its own device, or nothing is.
+  const raws = clauses(t);
+  if (raws) {
+    const lead = /^(?:please |hey |ok |okay |can you |could you |would you |now )*(turn|switch|set|make|put)\b/.exec(t)?.[1];
+    const results: DeviceCommandResult[] = [];
+    for (const [i, part] of raws.entries()) {
+      // "turn the desk lamp on and the bedroom lamp off": the verb carries over.
+      const said = i > 0 && lead && !/^(?:turn|switch|set|make|put|dim|brighten|play|pause|stop|resume|next|skip)\b/.test(part) ? `${lead} ${part}` : part;
+      const r = parseOne(said, said, devices, opts);
+      if (!r) return null;
+      results.push(r);
+    }
+    const ids = results.flatMap((r) => r.intents.map((x) => x.deviceId));
+    // The same device twice ("turn the lamp on then off"): refused, not guessed.
+    if (new Set(ids).size !== ids.length) return null;
+    return { intents: results.flatMap((r) => r.intents), say: results.map((r) => r.say).join(' ') };
+  }
+  return parseOne(text, t, devices, opts);
+}
+
+function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
 
   // Music is a separate vocabulary (play / pause / next / louder / softer) and
   // targets the music devices; lamp verbs never touch a speaker.
@@ -135,6 +202,10 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
     // "the music" / "volume" / "song" lets "turn it down" and "stop" target the
     // speaker; bare "turn down" without a music word stays a lamp command.
     const musicNamed = /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t);
+    // "set the volume to 40 percent", "speaker 30 percent": a volume, never
+    // a lamp's brightness. As asked, never clamped (the store refuses).
+    const volPercent = musicNamed ? percentOf(text) : null;
+    if (volPercent !== null) return { intents: musics.map((d) => ({ deviceId: d.id, volume: volPercent })), say: `Volume ${volPercent}%.` };
     // A music verb counts only when it IS the command ("next", "play",
     // "pause please") or the sentence is about music ("next song", "play the
     // music"). Inside any other sentence it is just a word: "a study NEXT to
@@ -162,10 +233,14 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   }
 
   const matched = matchDevices(t, lamps);
+  // A music word with no lamp named is about the speaker: never the lamps
+  // (with no speaker connected, "volume 40 percent" does nothing here).
+  if (!matched.length && /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t)) return null;
   const hasAllWord = /\b(lights?|lamps?|everything|all|room)\b/.test(t);
 
   // Percent is read from the raw text — norm() strips the "%" sign.
-  const percent = /(\d{1,3})\s*(?:percent|%)/.exec(text.toLowerCase());
+  const percentValue = percentOf(text);
+  const percent = percentValue !== null;
   const warmer = /\bwarm(er)?\b/.test(t);
   const cooler = /\bcool(er)?\b/.test(t);
   const dimmer = /\b(dim|dimmer|darker|lower)\b/.test(t)
@@ -220,7 +295,7 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
 
   if (percent) {
     // As asked, never clamped: the store refuses anything outside 10–100 %.
-    const v = Number(percent[1]);
+    const v = percentValue!;
     const intents = targets.map((d) => ({ deviceId: d.id, on: v > 0, brightness: v }));
     return { intents, say: `${labelList(targets, all)} to ${v}%.` };
   }
@@ -249,6 +324,14 @@ export function parseDeviceCommands(text: string, devices: readonly DeviceRef[],
   }
 
   return null;
+}
+
+/** The level said as a percent ("40 percent", "40%", "-20 percent",
+ *  "1000 percent", "12.5%"), read whole from the raw text (norm() strips the
+ *  sign and the point); null when none. */
+function percentOf(text: string): number | null {
+  const m = /(?<![\d.])(-?\d+(?:\.\d+)?)\s*(?:percent|per cent|%)/.exec(text.toLowerCase());
+  return m ? Number(m[1]) : null;
 }
 
 /** Map the magnet-focused element (button / tile / chip) to a device, so
