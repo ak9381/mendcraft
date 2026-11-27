@@ -229,6 +229,8 @@ export function mountArtifactsSheet(host: HTMLElement, deps: ArtifactsSheetDeps)
   /** The last row removed this session, as it was stored: "Undo remove" puts it back. */
   let lastRemoved: Artifact | null = null;
   let staged: ImportPlan | null = null;
+  /** The checked file behind `staged`: Import counts again from it at the tap. */
+  let stagedFrom: { ok: Artifact[]; dropped: number } | null = null;
   let writing = false;
 
   async function paint(): Promise<void> {
@@ -282,34 +284,40 @@ export function mountArtifactsSheet(host: HTMLElement, deps: ArtifactsSheetDeps)
     deps.onChange();
   }
 
-  /** Write rows (an import, or the row Undo remove puts back). */
-  async function write(rows: Artifact[], doneLine: (n: number) => string): Promise<void> {
-    if (writing) return;
+  /** Write rows (an import, or the row Undo remove puts back). `failLine`
+   *  says a failure (default: the import's "Imported 2 of 3, then: …").
+   *  Resolves to whether every row was written. */
+  async function write(rows: Artifact[], doneLine: (n: number) => string, failLine?: (e: unknown, put: number) => string): Promise<boolean> {
+    if (writing) return false;
     writing = true;
     deps.importing?.(true);
     let put = 0;
     try {
       for (const a of rows) {
         try { await deps.store.put(a); put++; } catch (e) {
-          deps.say(put ? `Imported ${put} of ${rows.length}, then: ${errLine(e)}` : errLine(e));
+          deps.say(failLine ? failLine(e, put) : put ? `Imported ${put} of ${rows.length}, then: ${errLine(e)}` : errLine(e));
           if (!put) deps.importing?.(false);
           await paint();
           if (put) deps.onChange();
-          return;
+          return false;
         }
       }
       deps.say(doneLine(put));
       await paint();
       deps.onChange();
+      return true;
     } finally { writing = false; }
   }
 
   async function undoRemove(): Promise<void> {
     const row = lastRemoved;
-    if (!row) return;
+    if (!row || writing) return;
     lastRemoved = null;
     undoBtn.hidden = true;
-    await write([row], () => `Put back “${row.title}”.`);
+    const lower = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+    const ok = await write([row], () => `Put back “${row.title}”.`, (e) => `Couldn't put back “${row.title}”: ${lower(errLine(e))}`);
+    // Not put back: Undo remove stays, to try again.
+    if (!ok && !lastRemoved) { lastRemoved = row; undoBtn.hidden = false; }
   }
 
   async function exportNow(): Promise<string | null> {
@@ -332,7 +340,14 @@ export function mountArtifactsSheet(host: HTMLElement, deps: ArtifactsSheetDeps)
     return text;
   }
 
-  function hideConfirm(): void { staged = null; confirm.hidden = true; confirmText.textContent = ''; }
+  function hideConfirm(): void { staged = null; stagedFrom = null; confirm.hidden = true; confirmText.textContent = ''; }
+  function showConfirm(plan: ImportPlan): string[] {
+    const lines = importSummary(plan);
+    confirmText.textContent = '';
+    for (const line of lines) confirmText.append(make('p', 'mc-artifacts-confirm-line', line));
+    confirm.hidden = false;
+    return lines;
+  }
 
   async function importText(text: string): Promise<void> {
     hideConfirm();
@@ -342,20 +357,32 @@ export function mountArtifactsSheet(host: HTMLElement, deps: ArtifactsSheetDeps)
     let stored: Artifact[];
     try { stored = (await deps.store.list()).filter((a) => coerceArtifact(a).ok); } catch { deps.say("Stored artifacts couldn't be read, so nothing was imported. Nothing changed."); return; }
     staged = planImport(got, stored);
-    const lines = importSummary(staged);
-    confirmText.textContent = '';
-    for (const line of lines) confirmText.append(make('p', 'mc-artifacts-confirm-line', line));
-    confirm.hidden = false;
+    stagedFrom = got;
+    const lines = showConfirm(staged);
     deps.say(`${lines[0]} Tap Import to bring them in, or Cancel.`);
     doImport.focus?.();
   }
 
-  doImport.addEventListener('click', () => {
+  /** Import tapped: count again against the store as it is NOW (a board
+   *  saved meanwhile may be replaced, or more hidden). Changed counts are
+   *  shown and asked again; the same counts are written. */
+  async function importTapped(): Promise<void> {
     const plan = staged;
-    if (!plan) return;
+    const from = stagedFrom;
+    if (!plan || !from || writing) return;
+    let now: ImportPlan;
+    try { now = planImport(from, (await deps.store.list()).filter((a) => coerceArtifact(a).ok)); } catch { hideConfirm(); deps.say("Stored artifacts couldn't be read, so nothing was imported. Nothing changed."); return; }
+    if (staged !== plan) return; // cancelled meanwhile
+    if (JSON.stringify(importSummary(now)) !== JSON.stringify(importSummary(plan))) {
+      staged = now;
+      const lines = showConfirm(now);
+      deps.say(`What is stored changed. ${lines[0]} Tap Import to bring them in, or Cancel.`);
+      return;
+    }
     hideConfirm();
-    void write(plan.rows, (n) => [`Imported ${plural(n, 'artifact')}.`, leftOut(plan.dropped)].filter(Boolean).join(' '));
-  });
+    void write(now.rows, (n) => [`Imported ${plural(n, 'artifact')}.`, leftOut(now.dropped)].filter(Boolean).join(' '));
+  }
+  doImport.addEventListener('click', () => { void importTapped(); });
   cancelImport.addEventListener('click', () => { if (!staged) return; hideConfirm(); deps.say(IMPORT_CANCELLED_LINE); });
   undoBtn.addEventListener('click', () => { void undoRemove(); });
   exportBtn.addEventListener('click', () => { void exportNow(); });

@@ -230,6 +230,49 @@ describe('the Artifacts sheet', () => {
     expect(undo.hidden).toBe(true);
   });
 
+  it('a failed Undo remove says "Couldn\'t put back …" and keeps Undo remove to try again', async () => {
+    const desk = board('f1', { title: 'Desk', at: AT, by: 'nano' });
+    const store = createMemoryArtifactStore([desk]);
+    const { host, sheet, said, onChange } = sheetOn(store);
+    sheet.open();
+    await vi.waitFor(() => expect(host.querySelectorAll('.mc-artifacts-row').length).toBe(1));
+    const remove = host.querySelector<HTMLButtonElement>('.mc-artifacts-remove')!;
+    remove.click(); await flush(); remove.click();
+    await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    const put = store.put.bind(store);
+    store.put = () => Promise.reject(new Error('quota exceeded'));
+    const undo = host.querySelector<HTMLButtonElement>('.mc-artifacts-undo')!;
+    undo.click();
+    await vi.waitFor(() => expect(said.at(-1)).toMatch(/^Couldn't put back “Desk”/));
+    expect(said.at(-1)).toBe("Couldn't put back “Desk”: the store couldn't be changed (quota exceeded). Nothing changed.");
+    expect(said.join(' ')).not.toMatch(/Imported/);
+    expect(undo.hidden).toBe(false);
+    store.put = put;
+    undo.click();
+    await vi.waitFor(() => expect(said.at(-1)).toBe('Put back “Desk”.'));
+    expect(await store.list()).toEqual([desk]);
+  });
+
+  it('Import counts again at the tap: a store that changed meanwhile shows the new counts and asks again', async () => {
+    const store = createMemoryArtifactStore([board('f1', { title: 'Desk', at: AT })]);
+    const file = JSON.stringify({ format: EXPORT_FORMAT, version: 1, artifacts: [board('f1', { title: 'Desk' }), board('f2', { title: 'Kitchen' })] });
+    const { host, sheet, said } = sheetOn(store);
+    sheet.open();
+    await sheet.importText(file);
+    const lines = () => [...host.querySelectorAll('.mc-artifacts-confirm-line')].map((p) => p.textContent);
+    expect(lines()[0]).toBe('Adds 1, replaces 1 (Desk).');
+    // Meanwhile Kitchen is saved from the canvas: the file would now replace it too.
+    await store.put(board('f2', { title: 'Kitchen', at: AT }));
+    host.querySelector<HTMLButtonElement>('.mc-artifacts-do-import')!.click();
+    await vi.waitFor(() => expect(lines()[0]).toBe('Adds 0, replaces 2 (Desk, Kitchen).'));
+    expect(host.querySelector<HTMLElement>('.mc-artifacts-confirm')!.hidden).toBe(false);
+    expect(said.at(-1)).toMatch(/^What is stored changed\. Adds 0, replaces 2 \(Desk, Kitchen\)\. Tap Import to bring them in, or Cancel\.$/);
+    expect((await store.list()).find((a) => a.id === 'board-f2')?.at).toBe(AT); // nothing written yet
+    // Tapped again with nothing changed: written.
+    host.querySelector<HTMLButtonElement>('.mc-artifacts-do-import')!.click();
+    await vi.waitFor(() => expect(said.at(-1)).toBe('Imported 2 artifacts.'));
+  });
+
   it('import of text that is not JSON says "That file isn\'t a Mendcraft export. Nothing changed."', async () => {
     expect(NOT_AN_EXPORT_LINE).toBe("That file isn't a Mendcraft export. Nothing changed.");
     const { sheet, store, said, onChange } = sheetOn(createMemoryArtifactStore([board()]));
