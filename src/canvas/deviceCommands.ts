@@ -156,8 +156,10 @@ export function isDeviceCommandShape(text: string, devices: readonly DeviceRef[]
   // "the lamps on" is "the lamp's on" heard without its apostrophe: a report.
   if (/^the \w+s (?:on|off|out)$/.test(words.join(' '))) return false;
   // A short phrase ends at its state: "lamp on", "desk lamp 40 percent",
-  // "volume up" — never "lamp on my desk", "room on the left".
-  return /(?:\b(?:on|off|out|up|down|brighter|dimmer|darker|lighter|warmer|cooler|louder|softer|quieter|percent|cent|quiet|medium|loud|full|max|half)|\d)$/.test(words.join(' '))
+  // "volume up" — never "lamp on my desk", "room on the left". A courtesy
+  // after the state is fine: "lamp on now", "lights on for me".
+  const ended = words.join(' ').replace(/(?:\s+(?:now|right now|again|for me|for us|thanks|thank you))+$/, '');
+  return /(?:\b(?:on|off|out|up|down|brighter|dimmer|darker|lighter|warmer|cooler|louder|softer|quieter|percent|cent|quiet|medium|loud|full|max|half)|\d)$/.test(ended)
     || (!!(colourFromSpeech(words.join(' ')) || sceneFromSpeech(words.join(' '))) && words.length <= 4);
 }
 

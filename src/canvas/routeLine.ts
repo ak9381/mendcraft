@@ -125,6 +125,9 @@ const ANY_LANGUAGE_NAMES: Record<string, string> = Object.fromEntries(LANGUAGES.
 const ARTIFACTS_RE = /^\s*(?:please\s+)?(?:(?:show|open|list)\s+(?:me\s+)?(?:(?:my|the|all)\s+)?(?:stored\s+|saved\s+)?)?artifacts(?:\s+please)?\s*[.!?]*\s*$/i;
 export const isArtifactsAsk = (text: string): boolean => ARTIFACTS_RE.test(text);
 
+/** "play …" that is a game or a figure of speech, not music. */
+const PLAY_NOT_MUSIC = /\b(?:games?|chess|cards?|carrom|football|cricket|tennis|ball|catch|tag|hide|pretend|tricks?|role|along|outside|dead|safe|fair|part|board|tile|video|demo|with\s+(?:me|you|us|him|her|them))\b/i;
+
 export function routeLine(text: string, world: RouteWorld): Route {
   const palette = matchPaletteCommand(text);
   if (palette === 'open') return { name: 'paletteOpen' };
@@ -176,6 +179,14 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (query && speaker) return { name: 'musicSearch', query, deviceId: speaker.id };
   const result = parseDeviceCommands(text, world.devices, { pointed: world.pointed ?? null });
   if (result) return { name: 'device', result };
+  // "play some jazz", "play <song>", "play something relaxing" with no Spotify
+  // search to run (not connected, or the sim): the speaker's play, as before
+  // — never chat. Not a game: "play chess with me" is talk.
+  const musics = world.devices.filter((d) => d.kind === 'music');
+  const mp = mi ?? parseMusicIntent(text.replace(/^\s*(?:(?:please|hey|ok|okay|now|can\s+you|could\s+you|would\s+you)[,\s]+)+/i, ''));
+  if (mp?.type === 'searchPlay' && musics.length && !PLAY_NOT_MUSIC.test(mp.query)) {
+    return { name: 'device', result: { intents: musics.map((d) => ({ deviceId: d.id, playing: true })), say: 'Playing.', statusKey: 'playing' } };
+  }
   const state = deviceStateAnswer(text, world.devices);
   if (state) return { name: 'deviceState', line: state };
   const cd = parseConnectDevices(text);
