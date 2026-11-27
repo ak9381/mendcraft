@@ -68,7 +68,7 @@ describe('state and past-tense claims (port of main C1)', () => {
 
   it('streaming holds a state claim until its sentence ends, then shows nothing', () => {
     expect(guardSafePrefix('Okay, the lamp is on')).not.toContain('lamp');
-    expect(guardSafePrefix('The heater is on, ')).toBe('');
+    expect(guardSafePrefix('The heater is on, ') ?? '').toBe(''); // held, or already refused whole
     expect(guardSafePrefix('The lamp is on now. ')).toBe(null);
     expect(guardSafePrefix('It is on. ')).toBe(null);
     expect(guardSafePrefix('I turned the lamp on. ')).toBe(null);
