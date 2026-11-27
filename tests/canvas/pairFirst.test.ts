@@ -199,6 +199,6 @@ describe('Disconnect after Continue (double press / tremor)', () => {
     const app = readFileSync(join(__dirname, '../../src/canvas/canvasApp.ts'), 'utf8');
     expect(app).toMatch(/const disconnectArm = createClickCooldown\(DISCONNECT_ARM_MS\)/);
     expect(app).toMatch(/if \(disconnectBtn && !hadDisconnect\) disconnectArm\.arm\(/);
-    expect(app).toMatch(/if \(!disconnectArm\.ready\(performance\.now\(\)\)\) return;\s*disconnectPhones\(\)/);
+    expect(app).toMatch(/if \(!disconnectArm\.ready\(performance\.now\(\)\)\) return;\s*disconnectPhones\(\{ forget: true \}\)/);
   });
 });

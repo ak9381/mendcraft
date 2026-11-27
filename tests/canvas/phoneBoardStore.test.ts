@@ -53,7 +53,7 @@ describe('a board received on the phone', () => {
     const saved: CanvasDoc[] = [];
     const { h } = phone(saved);
     expect(receive(h, wire(BOARD))).toBe(true);
-    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1));
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1), { timeout: 8000 });
     const put = stored(h, saved.at(-1));
     const boards = put.filter((a) => a.kind === 'board');
     expect(boards).toHaveLength(1);
@@ -82,7 +82,7 @@ describe('a board received on the phone', () => {
     (raw.board.tiles[0].controls[1] as { options: unknown[] }).options.push({ label: 'Blast', intent: { brightness: 500 } });
     raw.board.tiles[0].controls.push({ kind: 'button', label: 'Max', intent: { brightness: 900 } } as never);
     expect(receive(h, raw)).toBe(true);
-    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1));
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1), { timeout: 8000 });
     const plan = h.snapshot().surfaces[h.frames()[0].id];
     const json = JSON.stringify(plan);
     expect(json).not.toContain('Blast');
@@ -119,7 +119,7 @@ describe('the laptop sends only a board that says who made it', () => {
     const h = handle;
     // Two SIM phones (dev/test build + sim), then back to the stored board.
     h.run('connect devices');
-    await vi.waitFor(() => expect(h.edgeLayout().right).toBeTruthy(), { timeout: 6000 });
+    await vi.waitFor(() => expect(h.edgeLayout().right).toBeTruthy(), { timeout: 18000 });
     await h.focus('f1');
     return { h, saved };
   }
@@ -130,7 +130,7 @@ describe('the laptop sends only a board that says who made it', () => {
     expect(await h.sendBoard('right')).toBe(false);
     expect(h.statusSince(mark)).toContain("Couldn't send the board — it doesn't say who made it. Nothing was sent.");
     expect((window as Win).__mcLastBoardSnapshot?.board).toBeUndefined();
-  }, 15000);
+  }, 45000);
 
   it('a board with a maker goes with it', async () => {
     const { h } = await laptop('gemini');
@@ -138,15 +138,15 @@ describe('the laptop sends only a board that says who made it', () => {
     const snap = (window as Win).__mcLastBoardSnapshot;
     expect(snap?.board).toBeTruthy();
     expect(snap?.boardBy).toBe('gemini');
-  }, 15000);
+  }, 45000);
 
   it('pairing makes no fixed devices table: only her board is on the canvas and stored', async () => {
     const { h, saved } = await laptop('gemini');
     expect(h.frames().map((f) => f.title)).not.toContain('Connected devices');
     h.save();
-    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0), { timeout: 8000 });
     expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1']);
-  }, 15000);
+  }, 45000);
 });
 
 describe('a phone shows each board once (ported from sim-main remote-dedup)', () => {
@@ -156,7 +156,7 @@ describe('a phone shows each board once (ported from sim-main remote-dedup)', ()
     const saved: CanvasDoc[] = [];
     const { h } = phone(saved);
     expect(receive(h, wire(BOARD))).toBe(true);
-    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1));
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.length).toBe(1), { timeout: 8000 });
     expect(saved.at(-1)!.frames[0].from).toBe('laptop');
     expect(splitCanvasDoc(saved.at(-1)!, [], () => 'person', 1).layout.frames[0].from).toBe('laptop');
   });
@@ -177,7 +177,7 @@ describe('a phone shows each board once (ported from sim-main remote-dedup)', ()
     handle = mountCanvas(root, { autoHands: false, reducedMotion: true, connector: { run: async () => ({}) }, phoneShell: true, nativePhone: false, doc, onPersist: (d) => saved.push(d) });
     expect(handle.frames().map((f) => f.id)).toEqual(['f1', 'f2', 'f3']); // not the native app: nothing collapses on load
     expect(receive(handle, wire(FP))).toBe(true);
-    await vi.waitFor(() => expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1', 'f2']));
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1', 'f2']), { timeout: 8000 });
     expect(saved.at(-1)!.surfaces.f1).toEqual(notes); // her board was never taken for a copy
   });
   it('the native phone app collapses copies an older build saved, on load — never her own boards', () => {

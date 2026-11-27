@@ -183,6 +183,50 @@ export function revertFailedSave(artifacts: Artifact[], f: SaveFailure): Artifac
   return artifacts;
 }
 
+/** Artifacts written one at a time (a connector, next steps): a write the
+ *  store refuses is handed back (onFail) and queued, and the next change
+ *  (retry, or another keep) writes it again — like a board save. Nothing is
+ *  written while `blocked()` (an unread store, an import reloading). */
+export interface OneWriter {
+  keep(a: Artifact): void;
+  retry(): void;
+  /** Ids still waiting to be written again. */
+  pending(): string[];
+}
+export function createOneWriter(o: {
+  get(): Artifact[];
+  set(list: Artifact[]): void;
+  put(a: Artifact): Promise<void>;
+  blocked(): boolean;
+  onOk(): void;
+  onFail(f: SaveFailure): void;
+}): OneWriter {
+  const queued = new Map<string, Artifact>();
+  const latest = new Map<string, Artifact>();
+  function write(a: Artifact): void {
+    const prev = o.get().find((x) => x.id === a.id);
+    o.set([...o.get().filter((x) => x.id !== a.id), a]);
+    latest.set(a.id, a);
+    if (o.blocked()) { queued.set(a.id, a); return; }
+    void o.put(a).then(o.onOk, (e) => {
+      console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`);
+      o.onFail({ put: a, prev });
+      // Tried again on the next change, unless a newer version came since.
+      if (latest.get(a.id) === a) queued.set(a.id, a);
+    });
+  }
+  function retry(): void {
+    const list = [...queued.values()];
+    queued.clear();
+    for (const a of list) write(a);
+  }
+  return {
+    keep(a) { queued.delete(a.id); write(a); retry(); },
+    retry,
+    pending: () => [...queued.keys()],
+  };
+}
+
 export interface SaveTargets {
   layoutStorage: Pick<Storage, 'setItem'> | null;
   store: { put(a: Artifact): Promise<void>; remove(id: string): Promise<void> };

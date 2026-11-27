@@ -31,7 +31,7 @@ import { joinCanvasDoc, LAYOUT_KEY, tooManyBoardsLine, unjoinedIds } from './can
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
-import { clearStoreForFresh, createSaveFailNotice, loadLayout, loadLine, openFresh, reservedIds, revertFailedSave, saveCanvasDoc, STORE_SAVE_OFF_LINE, type SaveFailure } from './canvasStore';
+import { clearStoreForFresh, createOneWriter, createSaveFailNotice, loadLayout, loadLine, openFresh, reservedIds, revertFailedSave, saveCanvasDoc, STORE_SAVE_OFF_LINE, type SaveFailure } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 import { wizTokenFreeUrl } from '../devices/wizClient';
 
@@ -322,18 +322,21 @@ function persistDoc(doc: CanvasDoc): void {
     layoutStorage, store: artifactStore, layoutBlocked: layoutSaveBlocked, storeBlocked: !!loaded.readFailed,
     onFail: saveFailed, onOk: saveOk,
   });
+  // A connector or next steps the store refused is written again too.
+  oneWriter.retry();
 }
 /** One artifact written on its own (a connector, next steps). Never to a
- *  store that could not be read; a failure is said and retried like a save. */
-function keepOne(a: Artifact): void {
-  const prev = artifacts.find((x) => x.id === a.id);
-  artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
-  if (loaded.readFailed || reloading) return;
-  void artifactStore.put(a).then(saveOk, (e) => {
-    console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`);
-    saveFailed({ put: a, prev });
-  });
-}
+ *  store that could not be read; a failure is said and, like a board save,
+ *  tried again on the next change. */
+const oneWriter = createOneWriter({
+  get: () => artifacts,
+  set: (list) => { artifacts = list; },
+  put: (a) => artifactStore.put(a),
+  blocked: () => !!loaded.readFailed || reloading,
+  onOk: saveOk,
+  onFail: saveFailed,
+});
+function keepOne(a: Artifact): void { oneWriter.keep(a); }
 
 handle = mountCanvas(root, {
   voice, engines, fresh: freshOpen.fresh, sim: simRun,

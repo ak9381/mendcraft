@@ -41,7 +41,7 @@ import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } f
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
-import { clearHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
+import { clearHostToken, loadHostToken, loadLayout, saveHostToken, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import type { GimbalCueKind, GimbalModeKind } from '../relay/protocol';
@@ -815,6 +815,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // when it is the answer to whoIsThere (which arrives marked refresh).
       if (live === 'first') {
         refresh = false;
+        // A phone is really here: remember this room so a reload resumes it.
+        if (hostSession) saveHostToken(storage, hostSession.token);
         livePairing?.stopChime(); livePairing?.setStatus('Phone connected. What it proposes still waits for your keep here.');
         // The docked iPhone wakes up — for a phone that is really here, once.
         bodyLanguage('wakeup');
@@ -1093,7 +1095,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       hadDisconnect = !!disconnectBtn && !pairedRow.hidden;
       disconnectBtn?.addEventListener('click', () => {
         if (!disconnectArm.ready(performance.now())) return;
-        disconnectPhones(); say('Phones disconnected.');
+        disconnectPhones({ forget: true }); say('Phones disconnected.');
       });
       // Past the pairing step the card collapses into the row's "N phones connected"
       // chip (relay stays alive) so it never covers the review.
@@ -3925,8 +3927,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   let sheetOpen: { frameId: string; host: HTMLElement; sheet: ConnectSheet } | null = null;
   let pairingStop: (() => Promise<void>) | null = null;
-  /** Explicit Disconnect: stop the relay and reset the pair-first flow. */
-  function disconnectPhones(): void {
+  /** Stop the relay and reset the pair-first flow. `forget` (the explicit
+   *  Disconnect chip only) also forgets the room, so the next pairing is a new
+   *  room; closing a card or the sheet keeps it for the remembered phones. */
+  function disconnectPhones({ forget = false }: { forget?: boolean } = {}): void {
+    if (forget) clearHostToken(storage);
     if (pairingStop) { void pairingStop(); pairingStop = null; }
     if (pairingHost) pairingHost.hidden = true;
     pairFirst.cancel();
@@ -4011,12 +4016,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     open.sheet.setStatus('Opening a Relay room…');
     let pairing: PairingView | null = null;
-    // A new pairing opens a NEW room (C2): whoever heard an earlier code, and
-    // so learned that room's token, has nothing once this one starts. Phones
-    // paired in the open room keep it (the branch above re-opens a window on
-    // the same session); a phone paired in an earlier room hears the new chime.
-    clearHostToken(storage);
+    // The room a phone was really paired in is remembered (its first live
+    // announce) until the explicit Disconnect: a laptop reload, or the sheet
+    // closing while no phone is listed, resumes it, so remembered phones
+    // rejoin with no chime. With no phone remembered a NEW room is minted
+    // (C2). Either way the chime code is new for this window and is never
+    // derived from the token.
     const res = await startPhoneJoin({
+      token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
         if (st === 'paired') {
           // A hello proves little (the room replays old ones on a reload):
@@ -4095,7 +4102,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     floatHost.hidden = false;
     pairing = livePairing = showPairing(floatHost, {
       code: res.code,
-      note: 'After the first pair the phone is remembered while this room is open: it rejoins when you pick it up and look at it, or just open the app. Each new pairing opens a new room, so a phone paired before listens for this chime again. Its changes still arrive here as proposals you keep or drop.',
+      note: 'After the first pair the phone is remembered, even if this laptop reloads: it rejoins when you pick it up and look at it, or just open the app. Disconnect forgets the room, so a phone paired before then listens for the chime again. Its changes still arrive here as proposals you keep or drop.',
       // A phone already joined: X only ends pairing (the card has just said
       // it is connected). Nobody joined: X gives up the relay as before.
       // Disconnecting phones is the Disconnect chip's job alone.
