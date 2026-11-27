@@ -152,6 +152,8 @@ const APP_GERUND = 'turning|switching|setting|playing|adding|dimming|brightening
 /** The board's things, without bare pronouns ("Playing it safe" is talk). */
 const THING = OBJ.replace(/^it\|that\|them\|/, '');
 const STATE = 'on|off|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|warmer|cooler|locked|unlocked|connected|disconnected|stopped|added|removed|set|ready';
+/** A state that ends its clause ("on now.", "on for you", "off!"). */
+const STATE_END = String.raw`(?:\s+(?:now|already|for\s+you|again))*\s*(?:[.!,;—–]|$)`;
 const STATE_CLAIMS: RegExp[] = [
   // "I turned the lamp on", "I just dimmed the lights" — not "I set out…", "I changed my mind", "I turned 80".
   new RegExp(String.raw`\bI\s+(?:just\s+|now\s+|already\s+|also\s+|quickly\s+)?(?:${APP_PAST})\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing)\b)`, 'i'),
@@ -163,6 +165,23 @@ const STATE_CLAIMS: RegExp[] = [
   new RegExp(String.raw`\b(?:the|your|my)\s+(?:[\w’'-]+\s+){1,3}?(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE})|(?:${STATE})\s+now)\b`, 'i'),
   // "Done — …", "Done, the lamp is on", "Done: …"
   /(?:^|[.!?]\s*)(?:all\s+)?done\s*[—–:,-]/i,
+  // Final review 2. A pronoun in a changed state, ending its clause: "It's on
+  // now.", "It is on." — not "It's on my list", "If it's off, tap it".
+  new RegExp(String.raw`(?<!\b(?:if|when|whether|unless|once)\s+)\b(?:it|everything)\s*(?:is|'s)\s+(?:now\s+|all\s+)?(?:${STATE})${STATE_END}`, 'i'),
+  // Verbless: "Lamp on!", "Lights on for you.", "Lamp: on."
+  new RegExp(String.raw`(?:^|[.!?,;—–]\s*)(?:(?:okay|ok|sure|alright|done|there)[,!\s—–]+)?(?:the\s+|your\s+)?(?:${THING})\s*:?\s+(?:on|off)${STATE_END}`, 'i'),
+  // "Okay, lamp turned on." — a thing opening its clause with a past verb.
+  new RegExp(String.raw`(?:^|[.!?,;:—–]\s*)(?:the\s+|your\s+)?(?:${THING})\s+(?:${APP_PAST})\b(?!\s+(?:out|to|into)\b)`, 'i'),
+  // Passive: "The fan was switched off.", "The lamp got turned on."
+  new RegExp(String.raw`\b(?:${THING})\s+(?:was|were|got|has\s+been|have\s+been)\s+(?:just\s+|now\s+|already\s+)?(?:${APP_PAST})\b`, 'i'),
+  // "I made the lamp brighter.", "I've got the lamp on for you."
+  new RegExp(String.raw`\bI\s*(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:made|got|gotten|had)\s+(?:the|your|my)\s+(?:[\w'-]+\s+){0,2}?(?:${THING})\s+(?:${STATE})\b`, 'i'),
+  // "I did turn on the lamp." — not "I did think so".
+  new RegExp(String.raw`\bI\s+did\s+(?:just\s+)?(?:turn|switch|set|dim|brighten|play|add|start|stop|connect|open|close|move|remove|change|put|make|build|draw)${OBJ_PHRASE}`, 'i'),
+  // "Your lamp should be on now."
+  new RegExp(String.raw`\b(?:${THING}|it)\s+(?:should|must)\s+(?:now\s+)?be\s+(?:now\s+)?(?:${STATE})${STATE_END}`, 'i'),
+  // "There's now a study next to bedroom 2." — not "There's now a chance of rain".
+  new RegExp(String.raw`\bthere\s*(?:'s|\s+is|\s+are|'re)\s+now\s+(?:(?:${DET})\s+)*(?:[\w'-]+\s+)?(?:${THING})\b`, 'i'),
 ];
 /** A sentence that only shows her how to ask ("…if you say 'turn on the lamp'"). */
 const HOW_TO_ASK = /\bif\s+you\s+(?:say|ask|tell\s+me)\s*[,:]?\s*["“'‘]/i;
@@ -206,22 +225,41 @@ const judged = (t: string): string => t.split(/(?<=[.!?])\s+/).filter((s) => !HO
 export const CHAT_ENGLISH_ONLY = 'I can only chat in English for now.';
 /** Common function words of Spanish, French, German, Italian, Portuguese
  *  and Dutch that English does not use (so "a", "no", "me", "he", "has",
- *  "is", "in" are left out). */
-const FOREIGN_WORDS = new Set(('el|la|los|las|del|que|y|en|un|una|unos|por|para|con|es|está|esta|estoy|estás|muy|pero|sí|gracias|hola|lo|su|sus|como|más|ya|listo|hecho|claro|bien|aquí|también|le|les|des|du|et|est|je|j\'ai|tu|vous|nous|il|elle|une|pas|avec|pour|sur|dans|c\'est|oui|merci|bonjour|ai|suis|der|das|und|ist|ich|habe|nicht|ein|eine|mit|auf|für|wir|danke|hallo|gut|zu|ja|di|che|sono|grazie|ciao|gli|è|não|obrigado|obrigada|olá|eu|você|uma|em|het|een|ik|niet|wel').split('|'));
-const EN_WORDS = new Set(('i|i\'m|i\'ll|i\'d|i\'ve|you|you\'re|your|it|it\'s|is|are|was|be|am|the|of|and|to|that|this|what|how|can|would|will|for|with|my|we|not|have|has|do|there|here|so|just|like|all|about|at|on|or|but|if|she|her|good|nice|glad|happy|sorry|thanks|thank|hi|hello|hey|sure|yes|okay|me|a|an|let|make').split('|'));
+ *  "is", "in" are left out), plus the lamp words a foreign claim uses.
+ *  Final review 2: short words English also writes ("AI", "LA", "EU", "en
+ *  route", "pour", "ja", "du", "su", "est", "et al", "tu", "il", "le", "lo",
+ *  "di", "des", "con", "sur", "gut", "wel", "pas") are left out too. */
+const FOREIGN_WORDS = new Set(('el|los|las|del|que|y|un|una|unos|por|para|es|está|esta|estoy|estás|muy|pero|sí|gracias|hola|sus|como|más|ya|listo|hecho|claro|bien|aquí|también|les|vous|nous|elle|une|avec|dans|c\'est|oui|merci|bonjour|j\'ai|suis|der|das|und|ist|ich|habe|nicht|ein|eine|mit|auf|für|wir|danke|hallo|zu|che|sono|grazie|ciao|gli|è|não|obrigado|obrigada|olá|você|uma|em|het|een|ik|niet|encendido|encendida|encendí|apagado|apagada|lámpara|luz|luces|allumé|allumée|éteint|lampe|eingeschaltet|ausgeschaltet|accesa|acceso|spenta|ligada|ligado|aan|uit').split('|'));
+const EN_WORDS = new Set(('i|i\'m|i\'ll|i\'d|i\'ve|you|you\'re|your|it|it\'s|is|are|was|be|am|the|of|and|to|that|this|what|how|can|would|will|for|with|my|we|not|have|has|do|there|here|so|just|like|all|about|at|on|or|but|if|she|her|good|nice|glad|happy|sorry|thanks|thank|hi|hello|hey|sure|yes|okay|me|a|an|let|make|fine|ok').split('|'));
+/** Letters of a script other than Latin a short English reply may still
+ *  carry: one restored name ("Hi ಅಮ್ಮ!"), never a sentence. */
+const OTHER_SCRIPT_NAME_MAX = 12;
 /** True when a reply reads as English: most of its letters are plain Latin
- *  (a name restored in another script is fine), and it has no more common
- *  foreign words than English ones. */
+ *  (or a short English reply carries one or two words in another script,
+ *  a name), and it does not have at least two different common foreign
+ *  words outnumbering the English ones. */
 export function looksEnglish(text: string): boolean {
   const t = String(text ?? '').replace(/[’‘]/g, "'");
   const letters = t.match(/\p{L}/gu) ?? [];
   if (!letters.length) return true;
   const ascii = letters.filter((c) => /[A-Za-z]/.test(c)).length;
-  if (ascii / letters.length < 0.75) return false;
   const words = t.toLowerCase().match(/[\p{L}]+(?:'[\p{L}]+)?/gu) ?? [];
+  const latinWords = words.filter((w) => /[a-z]/.test(w));
+  const en = latinWords.filter((w) => EN_WORDS.has(w)).length;
+  if (ascii / letters.length < 0.75) {
+    const other = letters.length - ascii;
+    const otherWords = words.length - latinWords.length;
+    if (other > OTHER_SCRIPT_NAME_MAX || otherWords > 2 || en === 0) return false;
+  }
+  const foreign = new Set(latinWords.filter((w) => FOREIGN_WORDS.has(w))).size;
+  return foreign < 2 || foreign <= en;
+}
+/** While streaming: a reply whose foreign words still outnumber its English
+ *  ones is not shown yet ("Hola," may be the start of a Spanish reply). */
+function foreignSoFar(text: string): boolean {
+  const words = String(text ?? '').replace(/[’‘]/g, "'").toLowerCase().match(/[\p{L}]+(?:'[\p{L}]+)?/gu) ?? [];
   const foreign = words.filter((w) => FOREIGN_WORDS.has(w)).length;
-  const en = words.filter((w) => EN_WORDS.has(w)).length;
-  return foreign <= en;
+  return foreign > 0 && foreign > words.filter((w) => EN_WORDS.has(w)).length;
 }
 
 /** True when the reply promises (or claims) an action chat cannot take. */
@@ -248,6 +286,7 @@ export function guardSafePrefix(full: string): string | null {
   const whole = t.replace(/[\p{L}’'-]+$/u, '');
   // Not English (final review C1b): none of it is shown or spoken.
   if (!looksEnglish(whole)) return null;
+  if (foreignSoFar(whole)) return '';
   if (promisesAction(whole, false)) return null;
   const re = /[,.!?;:—…]+["'”’)\]]*(?=\s)/g;
   let out = 0;

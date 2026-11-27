@@ -371,3 +371,73 @@ describe('non-English replies are never parsed: a fixed honest line instead', ()
     expect(guardSafePrefix('ದೀಪ ಆನ್')).toBe(null);
   });
 });
+
+// Final review 2, C1 residuals: pronoun, verbless, passive, "I made/got/did"
+// and "there's now" claims — with their small-talk look-alikes still passing.
+describe('C1 residual claims (final review 2)', () => {
+  const claims = [
+    "It's on now.",
+    'It is on.',
+    'Lamp on!',
+    'Lights on for you.',
+    'Lamp: on.',
+    'Okay, lamp turned on.',
+    'I did turn on the lamp.',
+    'I made the lamp brighter.',
+    'The fan was switched off.',
+    "I've got the lamp on for you.",
+    'Your lamp should be on now.',
+    "There's now a study next to bedroom 2.",
+  ];
+  for (const c of claims) {
+    it(`replaces: ${c}`, () => {
+      expect(promisesAction(c)).toBe(true);
+      expect(promiseGuard(c, 'turn on the lamp').replaced).toBe(true);
+    });
+  }
+  const talk = [
+    "It's on my list of favourites.",
+    'Made my day!',
+    'It is on the tip of my tongue.',
+    "If it's off, tap its tile on the board.",
+    'Is it on? Its tile on the board says.',
+    'I made a cup of tea in my head.',
+    'I did think so too!',
+    "There's now a chance of sunshine.",
+    'Lights on Diwali are so pretty.',
+    'The lamp turned out lovely in the photo.',
+    'The study was a lovely idea.',
+    'It should be a nice day.',
+    'I got the joke!',
+    "That's on me, sorry.",
+  ];
+  for (const c of talk) it(`passes: ${c}`, () => expect(promiseGuard(c).replaced).toBe(false));
+});
+
+// Final review 2, C1b: short English replies that only look foreign.
+describe('English that looks foreign stays English (final review 2)', () => {
+  const english = [
+    'AI helps.',
+    'Gemini AI writes boards.',
+    'Nano AI.',
+    'LA traffic!',
+    'I love La La Land.',
+    'Pour water slowly.',
+    'EU rules differ.',
+    'En route!',
+    'Ja.',
+    'Ciao!',
+    'Hi ಅಮ್ಮ!',
+    'ಅಮ್ಮ is fine.',
+  ];
+  for (const e of english) {
+    it(`stays English: ${e}`, () => {
+      expect(looksEnglish(e)).toBe(true);
+      expect(promiseGuard(e).reply).toBe(e);
+    });
+  }
+  it('a reply mostly in another script is still replaced', () => {
+    expect(looksEnglish('ದೀಪ ಆನ್ ಆಗಿದೆ, ok.')).toBe(false);
+    expect(looksEnglish('ಅಮ್ಮ ದೀಪ ಆನ್ ಆಗಿದೆ ಈಗ ನೋಡಿ hi')).toBe(false);
+  });
+});
