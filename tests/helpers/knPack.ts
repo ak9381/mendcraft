@@ -37,4 +37,16 @@ export const KN_PACK: LanguagePack = {
     drop: ['ಬೇಡ'],
     undo: ['ರದ್ದುಮಾಡು'],
   },
+  status: {
+    lightsOn: 'ದೀಪ ಆನ್ ಆಯಿತು.',
+    lightsOff: 'ದೀಪ ಆಫ್ ಆಯಿತು.',
+    brighter: 'ಬೆಳಕು ಹೆಚ್ಚಾಯಿತು.',
+    dimmer: 'ಬೆಳಕು ಕಡಿಮೆಯಾಯಿತು.',
+    playing: 'ಹಾಡು ಶುರುವಾಯಿತು.',
+    paused: 'ಹಾಡು ನಿಂತಿದೆ.',
+    nextSong: 'ಮುಂದಿನ ಹಾಡು.',
+    louder: 'ಧ್ವನಿ ಹೆಚ್ಚಾಯಿತು.',
+    softer: 'ಧ್ವನಿ ಕಡಿಮೆಯಾಯಿತು.',
+    done: 'ಆಯಿತು.',
+  },
 };

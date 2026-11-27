@@ -936,6 +936,7 @@ async function language(page) {
   const text = await page.evaluate(reviewText);
   check(text.includes(`Show everything → ${kn.showEverything}`) && text.includes(`New board → ${kn.newBoard}`), `the review shows the strings (got ${JSON.stringify(text.slice(0, 500))})`);
   check(/Gemini · Replay · written example/.test(text), 'the review names "Gemini" in the Replay label');
+  check(text.includes(`Lights on. → ${KN_PACK_REPLY.status.lightsOn}`), 'the review shows the generated status lines too');
   check((await packArtifacts(page)).length === 0, '0 pack artifacts until Approve');
   check((await page.evaluate(bar)).showEverything === 'Show everything', 'the bar is still English until Approve');
 

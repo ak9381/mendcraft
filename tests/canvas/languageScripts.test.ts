@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  EN_PACK, LANG_NAMES, LANG_SCRIPTS, SCRIPT_UNKNOWN, coerceLanguagePack, languageAsk, packPrompt, packSwaps,
+  EN_PACK, LANG_NAMES, LANG_SCRIPTS, SCRIPT_UNKNOWN, STATUS_KEYS, coerceLanguagePack, languageAsk, packPrompt, packSwaps, statusText,
 } from '../../src/canvas/languagePack';
 import { mountCanvas, type CanvasHandle } from '../../src/canvas/canvasApp';
 import { createReplayEngines } from '../../src/canvas/replayEngine';
@@ -60,11 +60,44 @@ describe('the script check (LANG_SCRIPTS)', () => {
     expect(r.ok && r.value.phrases).toEqual({ lampOn: ['ದೀಪ ಆನ್ ಮಾಡು'] });
   });
 
+  it('a string must be mostly in its script, one line, with no hidden or direction characters', () => {
+    const withKeep = (keep: string) => coerceLanguagePack({ ...KN_PACK, strings: { ...KN_PACK.strings, keep } });
+    expect(withKeep('Show everything ಅ').ok).toBe(false); // English with one Kannada letter
+    expect(withKeep('\u202Eಇಟ್ಟುಕೋ').ok).toBe(false); // right-to-left override
+    for (const c of ['\u200B', '\u200E', '\u200F', '\u202A', '\u2066', '\u2069', '\uFEFF', '\u0007']) expect(withKeep(`ಇಟ್ಟು${c}ಕೋ`).ok, escape(c)).toBe(false);
+    expect(withKeep('ಇಟ್ಟು\nಕೋ').ok).toBe(false);
+    const zwj = withKeep('ನೆಲ ನಕ್ಷೆ\u200Dಗಳು\u200C');
+    expect(zwj.ok).toBe(true); // ZWJ / ZWNJ join Kannada letters
+    const trimmed = withKeep('  ಇಟ್ಟುಕೋ  ');
+    expect(trimmed.ok && trimmed.value.strings.keep).toBe('ಇಟ್ಟುಕೋ');
+    expect(withKeep('ಎಐ ಚಟುವಟಿಕೆ (AI)').ok).toBe(true); // a short Latin word inside is fine
+  });
+
+  it('a Latin-script pack that is mostly the English labels is refused', () => {
+    const r = coerceLanguagePack({ lang: 'es', strings: { ...EN_PACK.strings, showEverything: 'Mostrar todo' } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/still English/);
+  });
+
+  it('status lines are optional generated pack keys, checked like strings; English otherwise', () => {
+    const r = coerceLanguagePack({ ...KN_PACK, status: { lightsOn: 'ದೀಪ ಆನ್ ಆಯಿತು.', lightsOff: 'Lights off.', beep: 'ಬೀಪ್' } });
+    expect(r.ok && r.value.status).toEqual({ lightsOn: 'ದೀಪ ಆನ್ ಆಯಿತು.' });
+    if (!r.ok) return;
+    expect(statusText('lightsOn', r.value)).toBe('ದೀಪ ಆನ್ ಆಯಿತು.');
+    expect(statusText('lightsOff', r.value)).toBe('Lights off.');
+    const noStatus = coerceLanguagePack({ ...KN_PACK, status: undefined });
+    expect(noStatus.ok && noStatus.value.status).toBeUndefined();
+    expect(packPrompt('kn')).toContain('lightsOn: Lights on.');
+  });
+
   it('the hand-written fixture passes the check, with its "ai" phrase dropped', () => {
     const t = FIXTURE.reply;
     const r = coerceLanguagePack(JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1)));
     expect(r.ok).toBe(true);
-    if (r.ok) { expect(r.value.lang).toBe('kn'); expect(Object.keys(r.value.phrases)).not.toContain('ai'); }
+    if (r.ok) {
+      expect(r.value.lang).toBe('kn'); expect(Object.keys(r.value.phrases)).not.toContain('ai');
+      expect(Object.keys(r.value.status ?? {}).sort()).toEqual([...STATUS_KEYS].sort()); // "beep" dropped
+    }
   });
 
   it('the prompt names the language and the English labels, and the review lists each swap', () => {
@@ -87,21 +120,25 @@ describe('languageAsk', () => {
       ['add Kannada', 'kn'], ['switch to Hindi', 'hi'], ['in Tamil', 'ta'], ['add Telugu please', 'te'],
       ['change the language to Malayalam', 'ml'], ['use Bengali', 'bn'], ['switch to Gujarati.', 'gu'],
       ['add Marathi', 'mr'], ['in Spanish', 'es'], ['switch the canvas to French', 'fr'], ['add German', 'de'],
-      ['ಕನ್ನಡ', 'kn'], ['add हिन्दी', 'hi'],
+      ['Kannada pack', 'kn'], ['add हिन्दी', 'hi'], ['ಕನ್ನಡ ಪ್ಯಾಕ್'.replace(' ಪ್ಯಾಕ್', '') + ' pack', 'kn'],
     ];
     for (const [text, code] of asks) expect(languageAsk(text), text).toBe(code);
     for (const text of ['add Japanese', 'switch to English', 'play an old Kannada song', 'add a lamp', 'show everything',
-      'translate this to Hindi for me later', 'new board', '']) {
+      'translate this to Hindi for me later', 'new board', '', 'Hindi', 'ಕನ್ನಡ', 'German', 'I like Tamil films']) {
       expect(languageAsk(text), text).toBeNull();
     }
   });
 
   it('routes to one language turn: a table code, English, or a language it cannot check', () => {
     const world = { hasPlanBoard: false, devices: [] };
-    expect(routeLine('add Kannada', world)).toEqual({ name: 'language', code: 'kn' });
-    expect(routeLine('switch to English', world)).toEqual({ name: 'language', code: 'en' });
-    expect(routeLine('add Japanese', world)).toEqual({ name: 'language', code: 'ja' });
+    expect(routeLine('add Kannada', world)).toEqual({ name: 'language', code: 'kn', fresh: false });
+    expect(routeLine('switch to English', world)).toEqual({ name: 'language', code: 'en', fresh: false });
+    expect(routeLine('add Japanese', world)).toEqual({ name: 'language', code: 'ja', fresh: false });
+    expect(routeLine('make a new Kannada pack', world)).toEqual({ name: 'language', code: 'kn', fresh: true });
+    expect(routeLine('write me a fresh Hindi language pack please', world)).toEqual({ name: 'language', code: 'hi', fresh: true });
     expect(routeLine('play an old Kannada song', world).name).not.toBe('language');
+    // A language name said on its own, or in another sentence, is not an ask.
+    for (const t of ['Hindi', 'Japanese', 'English', 'my mother speaks Tamil']) expect(routeLine(t, world).name, t).not.toBe('language');
   });
 });
 
@@ -234,5 +271,51 @@ describe('the pack as an artifact', () => {
     const { root } = mount({ doc, packs: loaded.ok });
     expect(barText(root)).toBe('Show everything');
     expect(document.documentElement.lang).toBe('en');
+  });
+});
+
+describe('the language turn, more', () => {
+  const stub = (reply: string) => ({ gemini: () => ({ id: 'gemini' as const, sim: false, stream: async () => reply }) });
+
+  it('a pack that fails its check ends with "Nothing was generated."', async () => {
+    const bad = JSON.stringify({ ...KN_PACK, strings: { keep: 'ಇಟ್ಟುಕೋ' } });
+    const { h } = mount({ engines: stub(bad) });
+    h.run('add Kannada');
+    await vi.waitFor(() => expect(h.statusSince(0).some((t) => /^The Kannada pack was incomplete\. Still in English\. Nothing was generated\.$/.test(t))).toBe(true));
+    handle?.destroy(); document.body.innerHTML = '';
+    const other = mount({ engines: stub(JSON.stringify({ ...KN_PACK, lang: 'hi' })) });
+    other.h.run('add Kannada');
+    await vi.waitFor(() => expect(other.h.statusSince(0)).toContain('The pack came back for another language, not Kannada. Nothing was generated.'));
+    handle?.destroy(); document.body.innerHTML = '';
+    const nope = mount({ engines: { gemini: () => ({ id: 'gemini' as const, sim: false, stream: async () => { throw new Error('boom'); } }) } });
+    nope.h.run('add Kannada');
+    await vi.waitFor(() => expect(nope.h.statusSince(0).some((t) => t.startsWith('The Kannada pack didn’t arrive.') && t.endsWith('Nothing was generated.'))).toBe(true));
+  });
+
+  it('"make a new Kannada pack" asks Gemini again through review, even with one stored', async () => {
+    const { h, root } = mount({ engines: stub(FIXTURE.reply), packs: [packArtifact()] });
+    h.run('make a new Kannada pack');
+    await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Kannada'), { timeout: 8000 });
+    expect(barText(root)).toBe('Show everything');
+  });
+
+  it('offline, a language waits once: a second ask is not queued again', async () => {
+    const { h } = mount({ online: false, engines: stub(FIXTURE.reply) });
+    h.run('add Hindi');
+    h.run('switch to Hindi');
+    await vi.waitFor(() => expect(h.statusSince(0)).toContain('The Hindi pack is already waiting for Gemini. Nothing changed.'));
+  });
+
+  it('the maker: a replayed pack is replay\'s; going back to English is hers', async () => {
+    const { h, root } = mount({ engines: createReplayEngines({ 'gemini.pack.kn': FIXTURE.reply }) });
+    h.run('add Kannada');
+    await vi.waitFor(() => expect(reviewTitle(root)).toBe('Add Kannada'), { timeout: 8000 });
+    h.keep();
+    await vi.waitFor(() => expect(barText(root)).toBe('ಎಲ್ಲಾ ತೋರಿಸು'));
+    expect(h.makerOf('pack-kn')).toBe('replay');
+    h.run('switch to English');
+    await vi.waitFor(() => expect(barText(root)).toBe('Show everything'));
+    expect(h.history().at(-1)?.by).toBe('her');
+    expect(h.makerOf('pack-kn')).toBe('replay'); // the pack itself is unchanged
   });
 });

@@ -7,7 +7,7 @@ import { parseCanvasCommand, type CanvasCommand } from './canvasCommands';
 import { connectAsk } from './connectTurns';
 import { parseDeviceCommands, type DeviceCommandResult, type DeviceRef } from './deviceCommands';
 import { parseGimbalSpeech } from './gimbalCanvas';
-import { languageAskAny, routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
+import { parseLanguageAsk, routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
 import { LANGUAGES } from '../ai/language';
 import { parseConnectDevices } from './pairedRow';
 import { routePlanExtra, type PlanExtra } from './planExtras';
@@ -46,8 +46,9 @@ export type Route =
   | { name: 'pointConnect' }
   | { name: 'gimbalScan' } | { name: 'gimbal' }
   /** "add Kannada" / "switch to Hindi" / "in Tamil": a language pack for `code`
-   *  (a code outside LANG_SCRIPTS is refused; 'en' goes back to English). */
-  | { name: 'language'; code: string }
+   *  (a code outside LANG_SCRIPTS is refused; 'en' goes back to English).
+   *  `fresh`: "make a new Kannada pack" asks Gemini even with one stored. */
+  | { name: 'language'; code: string; fresh: boolean }
   | { name: 'history' }
   | { name: 'planExtra'; extra: PlanExtra }
   | { name: 'canvas'; cmd: CanvasCommand }
@@ -146,8 +147,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   const gimbal = parseGimbalSpeech(text);
   if (gimbal === 'scan') return { name: 'gimbalScan' };
   if (gimbal) return { name: 'gimbal' };
-  const lang = languageAskAny(text, ANY_LANGUAGE_NAMES);
-  if (lang) return { name: 'language', code: lang };
+  const lang = parseLanguageAsk(text, ANY_LANGUAGE_NAMES);
+  if (lang) return { name: 'language', ...lang };
   if (/^\s*(show\s+)?history\s*$/i.test(text)) return { name: 'history' };
   // CAD extras only when there is a plan board to run them on.
   const extra = routePlanExtra(text, world.hasPlanBoard);
