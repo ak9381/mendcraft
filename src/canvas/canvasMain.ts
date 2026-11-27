@@ -33,6 +33,7 @@ import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifact
 import type { CanvasDoc } from './frames';
 import { clearStoreForFresh, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, STORE_SAVE_OFF_LINE } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
+import { wizTokenFreeUrl } from '../devices/wizClient';
 
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */
@@ -64,6 +65,9 @@ const mcWindow = window as McWindow;
 const layoutStorage = (() => { try { return localStorage; } catch { return null; } })();
 const freshOpen = openFresh(layoutStorage, location.href);
 if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
+// ?wizToken= is stored, then leaves the address bar (it would show on camera).
+const tokenFree = wizTokenFreeUrl(location.href, layoutStorage);
+if (tokenFree) { try { history.replaceState(history.state, '', tokenFree); } catch { /* keep the address */ } }
 const { store: artifactStore, persistent } = await openArtifactStore();
 // A test build's ?fresh also empties the store — after copying it aside.
 if (freshOpen.fresh && testBuild && !(await clearStoreForFresh(artifactStore, layoutStorage))) console.warn('[mendcraft] ?fresh: stored boards could not be copied aside, so they were kept.');
