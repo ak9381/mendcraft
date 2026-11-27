@@ -17,7 +17,7 @@
 import { createServer } from 'node:http';
 import dgram from 'node:dgram';
 import { randomBytes } from 'node:crypto';
-import { isAllowedOrigin, isIPv4, validateParams } from './wizBridge.lib.mjs';
+import { createDiscovery, isAllowedOrigin, isBulbAddress, validateParams } from './wizBridge.lib.mjs';
 
 const WIZ_PORT = 38899;
 const BROADCAST = '255.255.255.255';
@@ -47,8 +47,15 @@ const TOKEN = args.token || randomBytes(16).toString('hex');
 const udp = dgram.createSocket('udp4');
 // Pending replies keyed by bulb IP → resolver (one in-flight request per bulb).
 const pending = new Map();
-// Discovery accumulator: ip → last reply object, filled during a broadcast window.
-let discovering = null;
+// Broadcast discovery: one window at a time, shared by overlapping /discover
+// calls (two tabs at boot must never crash the bridge).
+const discovery = createDiscovery({
+  send: () => {
+    const data = Buffer.from(JSON.stringify({ method: 'getPilot', params: {} }));
+    udp.setBroadcast(true);
+    udp.send(data, 0, data.length, WIZ_PORT, BROADCAST);
+  },
+});
 
 udp.on('message', (buf, rinfo) => {
   let msg = null;
@@ -57,7 +64,7 @@ udp.on('message', (buf, rinfo) => {
   } catch {
     return; // not our JSON
   }
-  if (discovering) discovering.set(rinfo.address, msg);
+  discovery.onMessage(rinfo.address, msg);
   const waiter = pending.get(rinfo.address);
   if (waiter) {
     pending.delete(rinfo.address);
@@ -86,26 +93,8 @@ function request(ip, message, timeoutMs = 1500) {
 }
 
 /** Broadcast getPilot and collect every bulb that answers within the window. */
-function discover(windowMs = 900) {
-  return new Promise((resolve) => {
-    discovering = new Map();
-    const message = { method: 'getPilot', params: {} };
-    const data = Buffer.from(JSON.stringify(message));
-    udp.setBroadcast(true);
-    // A couple of pulses in case the first datagram is dropped.
-    udp.send(data, 0, data.length, WIZ_PORT, BROADCAST);
-    setTimeout(() => udp.send(data, 0, data.length, WIZ_PORT, BROADCAST), 250);
-    setTimeout(() => {
-      const found = discovering;
-      discovering = null;
-      const bulbs = [];
-      for (const [ip, reply] of found) {
-        const result = reply && typeof reply === 'object' ? reply.result ?? reply : null;
-        bulbs.push({ ip, mac: result?.mac, state: result });
-      }
-      resolve(bulbs);
-    }, windowMs);
-  });
+function discover() {
+  return discovery.discover();
 }
 
 // ---- HTTP server ----------------------------------------------------------
@@ -168,14 +157,14 @@ const server = createServer(async (req, res) => {
       const body = await readJson(req);
       const ip = body.ip || args.bulb;
       if (!ip) return send(res, origin, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
-      if (!isIPv4(ip)) return send(res, origin, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
+      if (!isBulbAddress(ip)) return send(res, origin, 400, { error: 'ip must be a private LAN bulb address (dotted-quad IPv4, not broadcast)' });
       return send(res, origin, 200, { result: await request(ip, { method: 'getPilot', params: {} }) });
     }
     if (req.method === 'POST' && url.pathname === '/setPilot') {
       const body = await readJson(req);
       const ip = body.ip || args.bulb;
       if (!ip) return send(res, origin, 400, { error: 'no bulb ip (pass {ip} or run with --bulb)' });
-      if (!isIPv4(ip)) return send(res, origin, 400, { error: 'ip must be a dotted-quad IPv4 literal' });
+      if (!isBulbAddress(ip)) return send(res, origin, 400, { error: 'ip must be a private LAN bulb address (dotted-quad IPv4, not broadcast)' });
       // Out-of-range or unknown params are refused here (400), never clamped
       // and never sent to the bulb.
       const checked = validateParams(body.params);
@@ -200,6 +189,10 @@ udp.bind(() => {
     console.log('[wiz-bridge] GET /health  GET /discover  POST /getPilot  POST /setPilot  (all require header x-wiz-token)');
   });
 });
+
+// Last resort: one bad request or datagram never takes every lamp down.
+process.on('uncaughtException', (err) => console.error('[wiz-bridge] error (kept running):', err?.message || err));
+process.on('unhandledRejection', (err) => console.error('[wiz-bridge] error (kept running):', err?.message || err));
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
