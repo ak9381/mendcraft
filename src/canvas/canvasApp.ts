@@ -60,7 +60,7 @@ import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type Ar
 import { createMemoryArtifactStore, type ArtifactStore } from '../artifacts/store';
 import { approvalDate, makerLabel, mountArtifactsSheet } from './artifactsSheet';
 import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
-import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
@@ -1664,7 +1664,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!wizClient || opts.connector || discovering || Date.now() - lastDiscoverAt < REDISCOVER_MS) return;
     await discoverLamps(true);
   }
-  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)));
+  // A board's lamp tile whose bulb missed the last look ("Not connected")
+  // counts too: it is looked for again, so the tile is live when it answers.
+  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)))
+    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));
   if (wizClient && !opts.connector && liveLamps && typeof window !== 'undefined') {
     const t = setInterval(() => { if (!bridgeStatus.up || anyLampUnreachable()) void rediscoverLamps(); }, REDISCOVER_MS);
     addEventListener('pagehide', () => clearInterval(t), { once: true });
@@ -1785,7 +1788,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (r.deviceId && store.get(r.deviceId)) {
         store.patch(r.deviceId, { error: r.refusal });
         if (store.get(r.deviceId)?.unreachable) void rediscoverLamps();
-      }
+      } else if (r.deviceId && isManagedLampId(r.deviceId) && liveLamps) void rediscoverLamps(); // a "Not connected" lamp
       return;
     }
     if ('gimbal' in r) {

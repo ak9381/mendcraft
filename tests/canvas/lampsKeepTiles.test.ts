@@ -60,4 +60,10 @@ describe('I3: discovery never removes lamp tiles', () => {
     expect(at).toBeGreaterThan(0);
     expect(app.slice(at, at + 400)).not.toContain('persist()');
   });
+
+  it('a "Not connected" lamp tile keeps the 30 s re-discovery going, so the tile is live again when the bulb answers', () => {
+    const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(app).toContain('|| Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));');
+    expect(app).toContain('} else if (r.deviceId && isManagedLampId(r.deviceId) && liveLamps) void rediscoverLamps();');
+  });
 });

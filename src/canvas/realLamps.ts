@@ -228,7 +228,7 @@ export interface LampSwapTarget {
 }
 
 /** Every managed lamp id a board shows. */
-function managedLampIdsOn(plan: SurfacePlan): Set<string> {
+export function managedLampIdsOn(plan: SurfacePlan): Set<string> {
   const ids = new Set<string>();
   const scan = (tiles: TileSpec[]): void => {
     for (const t of tiles) {
