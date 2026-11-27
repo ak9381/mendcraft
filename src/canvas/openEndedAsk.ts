@@ -91,8 +91,8 @@ function strongExempt(verb: string, rest: string): boolean {
     case 'get': return /^\s+(?:back|to|you\s+(?:an?\s+)?(?:idea|answer|tip))\b|^\s+(?:it|that|what\s+you\s+mean)\s*(?:[.!,?]|$)|^\s+(?:this|that)\s+straight\b/i.test(rest);
     case 'set': return /^\s+(?:the\s+)?(?:record\s+straight|scene)\b/i.test(rest);
     case 'turn': return /^\s+(?:this|that|it)\s+around\b/i.test(rest);
-    // "I'll warm up to the idea", "I'll cool off" are talk; "warm up the room" is not.
-    case 'warm': case 'cool': return /^\s+(?:up|down|off)\s+to\b|^\s*(?:up|down|off)?\s*(?:[.!?,;]|$)/i.test(rest);
+    // "I'll warm up to the idea", "I'll warm to it", "I'll cool off and rest" are talk; "warm up the room" is not.
+    case 'warm': case 'cool': return /^\s*(?:\s(?:up|down|off))?\s*(?:to\b|and\b|[.!?,;]|$)/i.test(rest);
     default: return false;
   }
 }
