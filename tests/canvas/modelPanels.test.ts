@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildStayedLocalStrip, cloudReceivedDetail, formatFooterBytes, handoffReason, logTurnReceipt,
-  mountModelPanels, redactLines, MODEL_PANELS_HTML,
+  mountModelPanels, redactLines, MODEL_PANELS_HTML, TERM_LINES_KEEP,
 } from '../../src/canvas/modelPanels';
 import type { Person } from '../../src/privacy/directory';
 
@@ -88,6 +88,9 @@ class FakeEl {
   get innerHTML() { return this.html; }
   append(...nodes: FakeEl[]) { this.children.push(...nodes); }
   appendChild(node: FakeEl) { this.children.push(node); return node; }
+  get firstElementChild() { return this.children[0] ?? null; }
+  get lastElementChild() { return this.children[this.children.length - 1] ?? null; }
+  removeChild(node: FakeEl) { this.children = this.children.filter((c) => c !== node); return node; }
   classList = {
     add: (...cs: string[]) => {
       const cur = new Set(this.className.split(/\s+/).filter(Boolean));
@@ -140,6 +143,19 @@ function fakePanel(): HTMLElement {
   root.append(panels, footer);
   return root as unknown as HTMLElement;
 }
+
+describe('mountModelPanels — bounded long session', () => {
+  it('keeps at most TERM_LINES_KEEP lines per terminal, dropping the oldest', () => {
+    const aiPanel = fakePanel();
+    const panels = mountModelPanels(aiPanel, fakeDoc);
+    for (let i = 0; i < 1000; i++) panels.forEngine('nano').log('note', `line ${i}`);
+    const lines = (aiPanel as unknown as FakeEl).querySelector('.mc-terminal-nano')!.querySelector('.mc-term-lines')!;
+    expect(TERM_LINES_KEEP).toBe(200);
+    expect(lines.children.length).toBe(TERM_LINES_KEEP);
+    expect(lines.children[lines.children.length - 1].innerHTML).toContain('line 999'); // this fake has no prepend: appended
+    expect(lines.children[0].innerHTML).toContain('line 800');
+  });
+});
 
 describe('mountModelPanels — terminal log lines', () => {
   it('show() unhides the terminals', () => {
