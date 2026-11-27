@@ -20,6 +20,8 @@ export interface DeviceRef {
   volume?: number;
   /** Lamp white in Kelvin, when known (so "warmer" / "cooler" step from it). */
   temp?: number;
+  /** A real device this machine knows but cannot reach right now. */
+  unreachable?: boolean;
 }
 export interface DeviceCommandResult { intents: DeviceIntent[]; say: string; statusKey?: StatusKey }
 

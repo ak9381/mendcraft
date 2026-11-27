@@ -7,6 +7,7 @@ import { parseCanvasCommand, type CanvasCommand } from './canvasCommands';
 import { connectAsk } from './connectTurns';
 import { parseDeviceCommands, type DeviceCommandResult, type DeviceRef } from './deviceCommands';
 import { parseGimbalSpeech } from './gimbalCanvas';
+import { deviceStateAnswer } from './deviceStateAnswer';
 import { parseLanguageAsk, routePackPhrase, type IntentKey, type LanguagePack } from './languagePack';
 import { LANGUAGES } from '../ai/language';
 import { parseConnectDevices } from './pairedRow';
@@ -56,6 +57,8 @@ export type Route =
   | { name: 'canvas'; cmd: CanvasCommand }
   | { name: 'musicSearch'; query: string; deviceId: string }
   | { name: 'device'; result: DeviceCommandResult }
+  /** "is the lamp on?": the answer, read from the device store. */
+  | { name: 'deviceState'; line: string }
   | { name: 'connectDevices'; dashboard: boolean }
   /** "show my devices": a generated board around the live devices table. */
   | { name: 'showDevices' }
@@ -173,6 +176,8 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (query && speaker) return { name: 'musicSearch', query, deviceId: speaker.id };
   const result = parseDeviceCommands(text, world.devices, { pointed: world.pointed ?? null });
   if (result) return { name: 'device', result };
+  const state = deviceStateAnswer(text, world.devices);
+  if (state) return { name: 'deviceState', line: state };
   const cd = parseConnectDevices(text);
   if (cd) return { name: 'connectDevices', dashboard: cd.dashboard };
   if (/\bconnect (everything|all|the room|this room|my room)\b/i.test(text)) return { name: 'connectRoom' };

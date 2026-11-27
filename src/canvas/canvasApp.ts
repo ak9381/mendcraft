@@ -2559,7 +2559,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  at the moment of the turn (a lamp found after the bridge was allowed
    *  mid-session is in it; a remembered "Not reachable" bulb is not). */
   const roomDeviceHints = (): DeviceHint[] => answeringDevices(store.all(), { label: labelOf, kind: kindOf, live: liveLamps });
-  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp }));
+  const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp, unreachable: !!s.unreachable }));
   /** `from: 'phone'`: a phone asked for it (its words, or a tile it sent back). */
   let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement; from?: 'phone' } | null = null;
   /** Words a phone sent to run, so its review can be told from hers. */
@@ -5806,6 +5806,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         });
         return true;
       }
+      // "is the lamp on?": from the device store, never a chat guess.
+      case 'deviceState': say(r.line, { speak: true }); return true;
       case 'connectDevices': {
         // Phones first (pairing is fixed code); the dashboard review waits
         // for "build the dashboard", and "show my devices" generates the
