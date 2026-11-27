@@ -15,7 +15,7 @@ export function buildOpenEndedPrompt(text: string): string {
 }
 /** Chat can't act: it never touches a board, a device or the plan, so the
  *  model is told so — and promiseGuard() below catches it when it forgets. */
-export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. You cannot see whether a device is on. Reply in English: one or two short, friendly sentences, no emoji.';
+export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. Reply in English: one or two short, friendly sentences, no emoji.';
 
 /** What replaces a reply that promised an action chat cannot do — a plan
  *  ask gets the plan's own way in; anything else, the board's buttons. */
