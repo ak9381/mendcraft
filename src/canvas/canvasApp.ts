@@ -24,7 +24,7 @@ import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
-import { guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
+import { CHAT_ENGLISH_ONLY, guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
 import { PLAN_EDIT_FAIL, runPlanEditTurn, planRooms } from './planEdit';
 import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
@@ -5462,7 +5462,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const reply = guarded.reply;
     // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
-    if (guarded.replaced) panels.forEngine(r.engineId).log('note', 'the reply promised an action chat can’t take, so an honest line was shown instead');
+    if (guarded.replaced) panels.forEngine(r.engineId).log('note', guarded.reply === CHAT_ENGLISH_ONLY ? 'the reply was not in English, so it could not be checked and a fixed line was shown instead' : 'the reply promised an action chat can’t take, so an honest line was shown instead');
     aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);
     // A safe start of the reply may already be on screen / being said: the
     // honest line then starts afresh and cuts it off.

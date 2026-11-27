@@ -15,7 +15,7 @@ export function buildOpenEndedPrompt(text: string): string {
 }
 /** Chat can't act: it never touches a board, a device or the plan, so the
  *  model is told so — and promiseGuard() below catches it when it forgets. */
-export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will. One or two short, friendly sentences, plain words, no emoji.';
+export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. Reply in English: one or two short, friendly sentences, no emoji.';
 
 /** What replaces a reply that promised an action chat cannot do — a plan
  *  ask gets the plan's own way in; anything else, the board's buttons. */
@@ -91,8 +91,8 @@ function strongExempt(verb: string, rest: string): boolean {
     case 'get': return /^\s+(?:back|to|you\s+(?:an?\s+)?(?:idea|answer|tip))\b|^\s+(?:it|that|what\s+you\s+mean)\s*(?:[.!,?]|$)|^\s+(?:this|that)\s+straight\b/i.test(rest);
     case 'set': return /^\s+(?:the\s+)?(?:record\s+straight|scene)\b/i.test(rest);
     case 'turn': return /^\s+(?:this|that|it)\s+around\b/i.test(rest);
-    case 'warm': case 'cool': return /^\s+(?:up\s+to|down\s+(?:a\s+bit\s+)?(?:myself|first))\b/i.test(rest); // "I'll warm up to it"
-
+    // "I'll warm up to the idea", "I'll warm to it", "I'll cool off and rest" are talk; "warm up the room" is not (sim-main 0159aad).
+    case 'warm': case 'cool': return /^\s*(?:\s(?:up|down|off))?\s*(?:to\b|and\b|[.!?,;]|$)/i.test(rest);
     default: return false;
   }
 }
@@ -144,6 +144,26 @@ const PAST_CLAIMS: RegExp[] = [
   // "Got it, the fan is off." — chat switched nothing.
   /(?:^|[.!?]\s*)(?:got\s+it|done|okay|ok|sure|there|all\s+set|alright)[,!.—\s]+(?:the|your)\s+(?:[\w'-]+\s+){0,3}(?:is|are)\s+(?:now\s+)?(?:on|off|set|booked|sent|done|locked|unlocked|playing|paused|muted)\b/i,
 ];
+// Final review C1: a plain past tense ("I turned the lamp on"), a bare
+// participle opener ("Turned the lamp on.", "Sure! Turning the lamp on.") and
+// a state that changed ("The lamp is on now", "Done — …") are claims too.
+const APP_PAST = 'turned|switched|set|played|added|dimmed|brightened|paused|stopped|started|muted|unmuted|moved|removed|deleted|created|built|drew|drawn|placed|inserted|changed|updated|connected|disconnected|opened|closed|renamed|resized|widened|extended|enlarged|fixed|saved|undid|adjusted|lowered|raised|installed|recorded|put|warmed|cooled|heated|locked|unlocked|skipped|queued|restarted|resumed';
+const APP_GERUND = 'turning|switching|setting|playing|adding|dimming|brightening|pausing|stopping|starting|muting|unmuting|moving|removing|deleting|creating|building|drawing|placing|inserting|changing|updating|connecting|opening|closing|renaming|resizing|fixing|saving|undoing|adjusting|lowering|raising|putting|warming|cooling|heating|locking|unlocking|skipping|queueing|queuing|resuming';
+/** The board's things, without bare pronouns ("Playing it safe" is talk). */
+const THING = OBJ.replace(/^it\|that\|them\|/, '');
+const STATE = 'on|off|playing|paused|muted|unmuted|dimmed|brighter|dimmer|louder|quieter|warmer|cooler|locked|unlocked|connected|disconnected|stopped|added|removed|set|ready';
+const STATE_CLAIMS: RegExp[] = [
+  // "I turned the lamp on", "I just dimmed the lights" — not "I set out…", "I changed my mind", "I turned 80".
+  new RegExp(String.raw`\bI\s+(?:just\s+|now\s+|already\s+|also\s+|quickly\s+)?(?:${APP_PAST})\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing)\b)`, 'i'),
+  // "Turned the lamp on." / "Sure! Turning the lamp on." / "Switched off the fan for you."
+  new RegExp(String.raw`(?:^|[.!?,;:—–-]\s*)(?:${APP_PAST}|${APP_GERUND})(?:\s+(?:on|off|up|down|in|out|back|over))?(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${THING})\b`, 'i'),
+  // "The lamp is on (now)", "Your lights are off now", "The lamp's on now", "Lamp is on."
+  new RegExp(String.raw`(?:\b(?:the|your|my)\s+(?:[\w’'-]+\s+){0,2}|(?:^|[.!?,;:—]\s*))(?:${THING})\s*(?:is|are|['’]s|['’]re)\s+(?:now\s+|already\s+)?(?:${STATE})\b(?!\s*\?)`, 'i'),
+  // Any named thing that is "now" in a changed state: "The heater is on now", "The music is now playing".
+  new RegExp(String.raw`\b(?:the|your|my)\s+(?:[\w’'-]+\s+){1,3}?(?:is|are|['’]s|['’]re)\s+(?:now\s+(?:${STATE})|(?:${STATE})\s+now)\b`, 'i'),
+  // "Done — …", "Done, the lamp is on", "Done: …"
+  /(?:^|[.!?]\s*)(?:all\s+)?done\s*[—–:,-]/i,
+];
 /** A sentence that only shows her how to ask ("…if you say 'turn on the lamp'"). */
 const HOW_TO_ASK = /\bif\s+you\s+(?:say|ask|tell\s+me)\s*[,:]?\s*["“'‘]/i;
 /** The extra checks: true when any first-person claim of an action is in the text. */
@@ -171,12 +191,38 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
     if (i >= 0 && !/\byou\b/i.test(s.slice(0, i))) return true;
   }
   if (PAST_CLAIMS.some((re) => re.test(t))) return true;
+  if (STATE_CLAIMS.some((re) => re.test(t))) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
 /** Sentences that only teach her what to say are not judged. */
 const judged = (t: string): string => t.split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' ');
 
+// ── Non-English replies (final review C1b) ─────────────────────────────────
+// The guard above can only read English. Chat is told to answer in English,
+// and a reply that does not look English is never parsed: it is replaced
+// whole by this fixed honest line. English replies (to any language) stay
+// natural and every one of them still passes through the promise guard.
+export const CHAT_ENGLISH_ONLY = 'I can only chat in English for now.';
+/** Common function words of Spanish, French, German, Italian, Portuguese
+ *  and Dutch that English does not use (so "a", "no", "me", "he", "has",
+ *  "is", "in" are left out). */
+const FOREIGN_WORDS = new Set(('el|la|los|las|del|que|y|en|un|una|unos|por|para|con|es|está|esta|estoy|estás|muy|pero|sí|gracias|hola|lo|su|sus|como|más|ya|listo|hecho|claro|bien|aquí|también|le|les|des|du|et|est|je|j\'ai|tu|vous|nous|il|elle|une|pas|avec|pour|sur|dans|c\'est|oui|merci|bonjour|ai|suis|der|das|und|ist|ich|habe|nicht|ein|eine|mit|auf|für|wir|danke|hallo|gut|zu|ja|di|che|sono|grazie|ciao|gli|è|não|obrigado|obrigada|olá|eu|você|uma|em|het|een|ik|niet|wel').split('|'));
+const EN_WORDS = new Set(('i|i\'m|i\'ll|i\'d|i\'ve|you|you\'re|your|it|it\'s|is|are|was|be|am|the|of|and|to|that|this|what|how|can|would|will|for|with|my|we|not|have|has|do|there|here|so|just|like|all|about|at|on|or|but|if|she|her|good|nice|glad|happy|sorry|thanks|thank|hi|hello|hey|sure|yes|okay|me|a|an|let|make').split('|'));
+/** True when a reply reads as English: most of its letters are plain Latin
+ *  (a name restored in another script is fine), and it has no more common
+ *  foreign words than English ones. */
+export function looksEnglish(text: string): boolean {
+  const t = String(text ?? '').replace(/[’‘]/g, "'");
+  const letters = t.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return true;
+  const ascii = letters.filter((c) => /[A-Za-z]/.test(c)).length;
+  if (ascii / letters.length < 0.75) return false;
+  const words = t.toLowerCase().match(/[\p{L}]+(?:'[\p{L}]+)?/gu) ?? [];
+  const foreign = words.filter((w) => FOREIGN_WORDS.has(w)).length;
+  const en = words.filter((w) => EN_WORDS.has(w)).length;
+  return foreign <= en;
+}
 
 /** True when the reply promises (or claims) an action chat cannot take. */
 export function promisesAction(reply: string, complete = true): boolean {
@@ -186,11 +232,12 @@ export function promisesAction(reply: string, complete = true): boolean {
 /** The reply as it may be shown and spoken: an action promise is replaced
  *  by the honest line, everything else passes unchanged. */
 export function promiseGuard(reply: string, asked = ''): { reply: string; replaced: boolean } {
+  if (!looksEnglish(reply)) return { reply: CHAT_ENGLISH_ONLY, replaced: true };
   return promisesAction(reply) ? { reply: cantActLine(asked, reply), replaced: true } : { reply, replaced: false };
 }
 
 /** A clause that could still turn into a promise once its sentence ends. */
-const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b`, 'i');
+const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST})\b`, 'i');
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the
@@ -198,7 +245,10 @@ const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall
 export function guardSafePrefix(full: string): string | null {
   const t = String(full ?? '');
   // A word still being written ("I will b…") is not judged until it is whole.
-  if (promisesAction(t.replace(/[A-Za-z’'-]+$/, ''), false)) return null;
+  const whole = t.replace(/[\p{L}’'-]+$/u, '');
+  // Not English (final review C1b): none of it is shown or spoken.
+  if (!looksEnglish(whole)) return null;
+  if (promisesAction(whole, false)) return null;
   const re = /[,.!?;:—…]+["'”’)\]]*(?=\s)/g;
   let out = 0;
   let clauseStart = 0;

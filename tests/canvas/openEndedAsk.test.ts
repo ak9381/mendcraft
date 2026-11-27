@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { recordedEngine } from '../helpers/recordedEngine';
 import { type SurfaceEngine } from '../../src/canvas/aiTurn';
-import { buildOpenEndedPrompt, CHAT_CANT_ACT, CHAT_CANT_ACT_GENERIC, CHAT_CANT_ACT_OUTSIDE, guardSafePrefix, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
+import { buildOpenEndedPrompt, CHAT_CANT_ACT, CHAT_ENGLISH_ONLY, looksEnglish, CHAT_CANT_ACT_GENERIC, CHAT_CANT_ACT_OUTSIDE, guardSafePrefix, openEndedAsk, promiseGuard, promisesAction } from '../../src/canvas/openEndedAsk';
 
 describe('openEndedAsk', () => {
   it('answers from Nano when Nano is here and well', async () => {
@@ -203,6 +203,10 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     "Your daughter sounds lovely.",
     "I'll start by saying hello!",
     "I'll warm up to the idea.",
+    // sim-main 402cce1 / 0159aad
+    "I'll warm to it.",
+    "I'll cool off and rest.",
+    "I'll warm up and stretch first.",
   ];
   const claims = [
     'Yes, I can. I will call your daughter right away.',
@@ -246,7 +250,7 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     'Let me warm the kitchen up.',
   ];
   it('the sets are the agreed size', () => {
-    expect(smallTalk.length).toBe(61);
+    expect(smallTalk.length).toBe(64);
     expect(claims.length).toBe(38);
   });
   for (const c of smallTalk) it(`passes: ${c}`, () => expect(promisesAction(c)).toBe(false));
@@ -272,5 +276,98 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     expect(guardSafePrefix('Hi. I will be happy to explain. And')).toBe('Hi. I will be happy to explain.');
     for (const s of ['Hi. I’ll tell ', 'Hi. I’ll walk ', 'Hi. Let me start ', 'Hi. Sure, I can try ', 'Hi. I’ll stop ']) expect(guardSafePrefix(s)).toBe('Hi.');
     expect(guardSafePrefix('Hi. I’ll tell you a story. Once')).toBe('Hi. I’ll tell you a story.');
+  });
+});
+
+// Final review C1: plain past tense, bare participles and state claims are
+// claims too — chat changed nothing.
+describe('state and past-tense claims (final review C1)', () => {
+  const claims = [
+    'I turned the lamp on.',
+    'I switched off the fan.',
+    'I added a study next to bedroom 2.',
+    'The lamp is on now.',
+    'Turned the lamp on.',
+    'Sure! Turning the lamp on.',
+    'I set the lamp to warm white.',
+    'I played your jazz playlist.',
+    'I just dimmed the lights for you.',
+    'Done — the lamp is on.',
+    'Done — I turned it off.',
+    'Your lights are off now.',
+    "The lamp's on now.",
+    'The heater is on now.',
+    'The music is now playing.',
+    'Switched off the fan for you.',
+    'Okay, the fan is off.',
+    'Lamp is on.',
+  ];
+  for (const c of claims) {
+    it(`replaces: ${c}`, () => {
+      expect(promisesAction(c)).toBe(true);
+      expect(promiseGuard(c, 'is the lamp on').replaced).toBe(true);
+    });
+  }
+  const talk = [
+    'I turned 80 last spring — just kidding, I’m a helper.',
+    'Is the lamp on? You can check its tile on the board.',
+    'I set out to help, so ask me anything.',
+    'I changed my mind about that joke.',
+    'Moving on, how was your day?',
+    'Putting it simply: rest is good.',
+    'Playing cards sounds like fun.',
+  ];
+  for (const c of talk) it(`passes: ${c}`, () => expect(promiseGuard(c).replaced).toBe(false));
+  it('streaming holds a state claim until its sentence ends, then shows nothing', () => {
+    expect(guardSafePrefix('Okay, the lamp is on')).not.toContain('lamp');
+    expect(guardSafePrefix('The heater is on, ')).toBe('');
+    expect(guardSafePrefix('The lamp is on now. ')).toBe(null);
+    const s = guardSafePrefix('Sure! Turning the lamp ');
+    expect(s === null || !/Turning/.test(s)).toBe(true);
+  });
+});
+
+// Final review C1(b): the guard can only read English, so chat answers in
+// English and anything that does not look English is replaced whole.
+describe('non-English replies are never parsed: a fixed honest line instead', () => {
+  it('the model is told to answer in English', () => {
+    expect(buildOpenEndedPrompt('hola')).toMatch(/Reply in English/);
+  });
+  const foreign = [
+    'He encendido la lámpara.',
+    'Hola, estoy bien, gracias por preguntar.',
+    "J'ai allumé la lampe.",
+    'Ich habe die Lampe eingeschaltet.',
+    'ದೀಪ ಆನ್ ಆಗಿದೆ.',
+    'दीपक चालू कर दिया।',
+    'ランプをつけました。',
+    'Listo, la luz está encendida.',
+  ];
+  for (const f of foreign) {
+    it(`replaced: ${f}`, () => {
+      expect(looksEnglish(f)).toBe(false);
+      expect(promiseGuard(f, 'ದೀಪ ಆನ್ ಮಾಡು')).toEqual({ reply: CHAT_ENGLISH_ONLY, replaced: true });
+    });
+  }
+  it('the fixed line is honest and English', () => {
+    expect(CHAT_ENGLISH_ONLY).toBe('I can only chat in English for now.');
+  });
+  it('English small talk still passes, with a restored name in another script', () => {
+    for (const c of ['Hi!', 'Sure.', 'Hmm, good question!', 'Thanks — you too.', 'Good morning, ಅಮ್ಮ! How are you today?', 'Okay.']) expect(looksEnglish(c)).toBe(true);
+  });
+  it('every English small-talk probe still looks English', () => {
+    for (const c of ['Um, sure.', 'I have a gut feeling it will be sunny.', 'Let me make a suggestion: rest.', 'Non-stop rain today!', 'Faux pas happen to everyone.', 'Ho ho, nice one.', 'A nap sounds lovely.', 'Rest well.']) expect(looksEnglish(c)).toBe(true);
+  });
+  it('streaming: a foreign reply never shows a word', () => {
+    const reply = 'Hola, estoy bien, gracias por preguntar. ¿Y tú?';
+    for (let n = 1; n <= reply.length; n++) {
+      const safe = guardSafePrefix(reply.slice(0, n));
+      if (safe === null) return;
+      expect(safe).toBe('');
+    }
+    throw new Error('never caught');
+  });
+  it('streaming: non-Latin script is caught at once', () => {
+    expect(guardSafePrefix('ದೀಪ ಆನ್')).toBe(null);
   });
 });
