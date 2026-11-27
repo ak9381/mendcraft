@@ -11,9 +11,8 @@ import { coerceLayout } from '../../src/canvas/canvasPersistence';
 import {
   BEFORE_FRESH_KEY, CANVAS_STORAGE_KEY, DEVICES_BOARD_KEY, FRESH_SLOTS, MAX_UNREADABLE, REPAIR_SLOTS,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
-  BEFORE_FRESH_ARTIFACTS_KEY, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, resolveDevicesBoard, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
+  BEFORE_FRESH_ARTIFACTS_KEY, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
 } from '../../src/canvas/canvasStore';
-import { connectedDevicesPlan, isDevicesPlan } from '../../src/canvas/connectedDevices';
 
 function memStorage(init: Record<string, string> = {}) {
   const m = new Map(Object.entries(init));
@@ -158,19 +157,6 @@ describe('?fresh=1 never just deletes her boards', () => {
     s.setItem(CANVAS_STORAGE_KEY, layoutOf('Built in the fresh session'));
     expect(openFresh(s, `https://x.web.app${open.url}`).fresh).toBe(false);
     expect(loadLayout(s, CANVAS_STORAGE_KEY, quiet).layout!.frames[0].title).toBe('Built in the fresh session');
-  });
-});
-
-describe('the devices-board marker is trusted only on the devices list', () => {
-  const devices = connectedDevicesPlan([{ device: 'Laptop', status: 'This canvas', ok: true }]);
-  const dash = { kind: 'room' as const, title: 'Dashboard', tiles: [] };
-  it('a marker on the devices list stands; on any other board (or none) it is dropped', () => {
-    expect(isDevicesPlan(devices)).toBe(true);
-    expect(resolveDevicesBoard({ f1: devices, f2: dash }, 'f1')).toBe('f1');
-    expect(resolveDevicesBoard({ f1: devices, f2: dash }, 'f2')).toBeNull();
-    expect(resolveDevicesBoard({ f1: devices }, 'f9')).toBeNull();
-    expect(resolveDevicesBoard({ f1: devices }, null)).toBeNull();
-    expect(resolveDevicesBoard(null, 'f1')).toBeNull();
   });
 });
 

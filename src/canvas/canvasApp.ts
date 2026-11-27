@@ -49,9 +49,8 @@ import { renderProposalCard, type ProposalStatus } from '../ux/proposal';
 import { createActQueue, createDeviceStore, simulatedAck, spokenStatus, type DeviceConnector } from './deviceActions';
 import { createDeviceSurfaceIndex } from './deviceSurfaceIndex';
 import { createLocalNetworkCheck, BULB_UNREACHABLE_LINE } from './localNetwork';
-import { DEVICES_BOARD_KEY, resolveDevicesBoard } from './canvasStore';
 import { duplicateBoards, isNativePhoneApp, remoteBoardTarget } from './remoteBoards';
-import { connectedDeviceRows, connectedDevicesPlan, PHONE_FRESH_MS, DASHBOARD_TITLE, DEVICES_BOARD_TITLE, type ConnectedInput } from './connectedDevices';
+import { presentDeviceRows, PHONE_FRESH_MS, DASHBOARD_TITLE, type ConnectedInput, type DeviceRow } from './connectedDevices';
 import { connectorState, createConnectorGate, createUnreachableLampConnector, createWizAwareConnector, isWizDevice, type ApprovedConnector, type BridgeStatus, type LampConnector } from './wizDevices';
 import { buildConnectorPrompt, CONNECTOR_ROUTE_LINE, CONNECTOR_SENT as CONNECTOR_SENT_WORDS, connectorArtifactId, lampConnectorKey, parseConnectorReply, WIZ_LAMP_IDENTITY } from './connectorTurn';
 import { isPrivateIPv4 } from '../devices/connector';
@@ -73,7 +72,7 @@ import {
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
 import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
-import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, hasLampTile, pressIntent, volumeReadNeeded, type DevicePress } from './controlSpec';
+import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, deviceClassOf, formIntents, hasLampTile, planHasBindings, pressIntent, visualPress, volumeReadNeeded, type BindingResult, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
 import { EN_PACK, coerceLanguagePack, routePackPhrase, statusText, INTENT_ENGLISH, type IntentKey, type LangStringKey, type LanguagePack, type StatusKey } from './languagePack';
@@ -131,13 +130,13 @@ import { mountEngineBar, type EngineBar } from './engineBar';
 import { createWarmBar } from './warmBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
-import { boardForJourney } from './journey';
-import { createNextStepChips, NANO_PICK_IDLE_MS, planExtraRan, type NextChips } from './nextSteps';
-import { nanoQueue } from '../ai/nanoQueue';
+import { boardForJourney, isDevicesBoard, journeyStepOf, type JourneyStep } from './journey';
+import { coerceNextSteps, createNextStepChips, planExtraRan, STEPS_CONSTRAINT, stepsEngine, stepsPrompt, type NextChips, type ShownSteps } from './nextSteps';
+import { extractJson } from '../ai/cloudJson';
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
-import { identifyDevice, onNanoBusyHandoff, pickNextStepsOnDevice, type VisionTrace } from '../ai/hybrid';
+import { identifyDevice, onNanoBusyHandoff, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -183,6 +182,10 @@ export interface CanvasOptions {
   connectors?: readonly Artifact[];
   /** A connector she just approved, to be stored by the caller. */
   onConnector?: (a: Artifact) => void;
+  /** Generated next-step suggestions kept from earlier (checked at load). */
+  steps?: readonly Artifact[];
+  /** Suggestions just generated, to be stored by the caller. */
+  onSteps?: (a: Artifact) => void;
   /** Frame ids of stored boards not on the canvas (kept as they are): new
    *  boards never reuse them, so their saves can't collide. */
   reservedFrameIds?: readonly string[];
@@ -290,6 +293,12 @@ export const ROOM_MAX_W = 1280;
 export const ROOM_WIDE_MAX_W = 1680;
 /** Re-opening the code for one more phone failed; the paired phones are fine. */
 export const REPAIR_FAILED_LINE = 'Couldn’t reopen pairing — your phones are still connected.';
+/** The devices board is laid out by Gemini: offline there is no such turn. */
+export const DEVICES_OFFLINE_LINE = 'Showing your devices on a board needs Gemini, and you are offline. Nothing was generated.';
+/** A devices reply without the live table (it may not write rows itself). */
+export const NO_LIVE_TABLE_LINE = 'The reply had no live devices table. Nothing was generated.';
+/** A new board for "show my devices" until the model names it. */
+export const DEVICES_TITLE = 'Devices';
 
 /** The wider width to try for a room board that does not fit `freeH` at
  *  `w` (null: no wider try). `free`/`freeH` are screen px; at `minZ` the
@@ -325,17 +334,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // The caller joined this from the stored layout and artifacts; it is
   // checked again here, so a bad document opens a blank canvas, never half.
   const stored: CanvasDoc | null = opts.doc ? parseCanvasDoc(opts.doc) : null;
-  // The Connected devices board is marked by its frame id (kept beside the
-  // saved layout), never by its title: a board she renames stays what it is,
-  // and one she names "Connected devices" never becomes it. The marker is
-  // trusted only when that frame really holds the devices list — a stale one
-  // (or one whose id a new board took) never turns her board into it.
-  let devicesFrame: string | null = null;
-  if (stored) {
-    let legacy: string | null = null;
-    try { legacy = storage.getItem(DEVICES_BOARD_KEY); } catch { legacy = null; }
-    devicesFrame = resolveDevicesBoard(stored.surfaces, legacy);
-  }
   const doc = initialDoc(stored);
   const reg: FrameRegistry = createFrameRegistry(doc.frames, opts.reservedFrameIds ?? []);
   const surfaces: Record<string, SurfacePlan> = { ...doc.surfaces };
@@ -364,6 +362,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Display-only fitted size of the focused board (fitBoardWidth). */
   const focusFit = new Map<string, { w: number; h: number }>();
   let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
+  /** The live devices tables can be filled (the device wiring below exists). */
+  let liveTablesReady = false;
 
   const phoneShell = opts.phoneShell ?? (typeof window !== 'undefined' && isPhoneCanvasShell({
     capacitor: (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor ?? null,
@@ -969,7 +969,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     },
     buildDashboard: () => {
       // Phones stay paired (the pairing card's session stays open); the
-      // dashboard is built on its own board, never on Connected devices.
+      // dashboard is built on its own board, never on the devices board.
       const id = dashboardTarget(focusId ?? lastFocus);
       if (focusId !== id) { sync(); void focus(id); }
       void connectRoom(id);
@@ -1351,6 +1351,71 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const liveLamps = !opts.sim && !opts.devices && !opts.connector;
   // Approved generated connectors, by device key ("wiz|smart-bulb"). They are
   // data: only connector.ts planRequest and connectorTransport.ts act on them.
+  // ---- next-step suggestions (nextSteps.ts): generated, kept per journey step ----
+  const stepArtifacts = new Map<string, Artifact>();
+  for (const a of opts.steps ?? []) if (a.kind === 'steps' && typeof a.data.at === 'string') stepArtifacts.set(a.data.at, a);
+  /** The replay label a test build's suggestions answer with (looked up once). */
+  let stepsReplay: string | null | undefined;
+  const stepsReplayLabel = (): string => {
+    if (stepsReplay === undefined) stepsReplay = replayRouteIn(opts.engines?.nano?.('steps')?.routeLine ?? opts.engines?.gemini?.('steps')?.routeLine);
+    return stepsReplay ?? 'Replay';
+  };
+  /** Who wrote a set of suggestions, as the chip row says it. */
+  const stepsLabel = (by: ArtifactBy): string => (by === 'replay' ? stepsReplayLabel() : by === 'nano' ? 'Gemini Nano · on device' : by === 'apple' ? 'Apple · on device' : by === 'gemini' ? 'Gemini · cloud' : 'You');
+  /** The journey step a board is at (journey.ts). */
+  function journeyAt(frameId: string): JourneyStep | null {
+    const f = reg.get(frameId);
+    if (!f) return null;
+    return journeyStepOf(boardForJourney(f, surfaces[frameId]), {
+      lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length,
+      pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+      devicesBoard: isDevicesBoard(surfaces[frameId]), checked: checkedBoards.has(frameId),
+    });
+  }
+  /** Plan boards whose accessibility check really ran (the journey's "checked"). */
+  const checkedBoards = new Set<string>();
+  let stepsAsking = false;
+  /** After an approved change: the suggestions for the step that board is now
+   *  at — kept ones if this step has them, else written once by Nano (Gemini
+   *  only with no Nano here, online). No engine: no chips. A bad reply is
+   *  refused and logged; nothing is made up in its place. */
+  function approvedChange(frameId: string): void { setTimeout(() => { void requestSteps(frameId); }, 0); }
+  async function requestSteps(frameId: string): Promise<void> {
+    if (phoneShell || stepsAsking) return;
+    const at = journeyAt(frameId);
+    if (!at) return;
+    if (stepArtifacts.has(at)) { nextChips?.refresh(); return; }
+    const engine = stepsEngine(engineFor('nano', 'steps'), engineFor('gemini', 'steps'), net.isOnline());
+    if (!engine) return;
+    stepsAsking = true;
+    const log = (line: string) => panels.forEngine(engine.id).log('note', line);
+    try {
+      const prompt = stepsPrompt(at, { devices: Object.keys(store.all()).length, boards: reg.list().length, phones: pairFirst.phones().length });
+      const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200 });
+      const raw = extractJson(full);
+      // The step is ours, not the reply's: what she is at decides where they show.
+      const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at } : raw);
+      if (!r.ok) { log(`Next steps refused: ${r.error}. Nothing was generated.`); return; }
+      for (const n of r.notes ?? []) log(n);
+      const by: ArtifactBy = replayRouteIn(engine.routeLine) ? 'replay' : engine.id;
+      const prev = stepArtifacts.get(at);
+      const art = coerceArtifact({ id: artifactId('steps', at), kind: 'steps', v: (prev?.v ?? 0) + 1, title: `Next steps: ${at}`, data: r.value, by, at: Date.now(), status: 'approved' });
+      if (!art.ok) { log(`Next steps refused: ${art.error}. Nothing was generated.`); return; }
+      stepArtifacts.set(at, art.value);
+      opts.onSteps?.(art.value);
+      log(`next steps (${at}): ${r.value.steps.map((x) => x.label).join(' · ')}`);
+      nextChips?.refresh();
+    } catch (e) {
+      log(`Next steps didn’t arrive: ${e instanceof Error ? e.message : String(e)}`);
+    } finally { stepsAsking = false; }
+  }
+  /** The kept suggestions for a journey step, with who wrote them. */
+  function stepsFor(at: JourneyStep): ShownSteps | null {
+    const a = stepArtifacts.get(at);
+    const steps = a?.data.steps as ShownSteps['steps'] | undefined;
+    return a && steps?.length ? { steps, label: stepsLabel(a.by) } : null;
+  }
+
   const connectorArtifacts = new Map<string, Artifact>();
   for (const a of opts.connectors ?? []) {
     const c = (a.data as { connector?: { key?: unknown } }).connector;
@@ -1416,6 +1481,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const targets = deviceId ? deviceSurfaces.targetsFor(deviceId) : undefined;
     const sids = targets && targets.size ? targets : live;
     for (const sid of sids) processor.processMessages([{ ...m, updateDataModel: { ...u, surfaceId: sid } }] as never);
+    // A device that came, went or changed what it reports: the live tables follow.
+    if (liveTablesReady) queueMicrotask(refreshLiveTables);
   }, () => 'fanout');
   // Every device command — tile press, gesture or voice — goes through this
   // one per-device lane, so they can never overtake each other.
@@ -1476,7 +1543,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function sayLocalNetworkBlocked(): Promise<string> {
     const line = await lna.line();
     if (line && !lnaSaid) { lnaSaid = true; say(line, { speak: true }); }
-    if (line !== lnaLine) { lnaLine = line; if (devicesWired) refreshDevicesBoard(); }
+    if (line !== lnaLine) { lnaLine = line; if (devicesWired) refreshLiveTables(); }
     return line;
   }
   if (liveLamps) {
@@ -1517,7 +1584,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (liveLamps) store.patch(id, { sim: true, unreachable: true });
       else store.setSim(id, true);
     }
-    if (devicesWired) refreshDevicesBoard();
+    if (devicesWired) refreshLiveTables();
   }
   /** Re-discovery while the bridge is away: at most once per 30 s (a timer
    *  while any lamp is unreachable, and on a refused press). */
@@ -1552,14 +1619,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         }
         // Chrome blocking local network access is the reason: say so, once.
         if (lamps === null && liveLamps) void sayLocalNetworkBlocked();
-        if (devicesWired) refreshDevicesBoard();
+        if (devicesWired) refreshLiveTables();
         return;
       }
       const changed = applyRealLamps(lampSwap, lamps);
       syncConnectorLabels();
       for (const fid of changed) renderSurface(fid);
       if (changed.length) { sync(); updateDock(); persist(); }
-      if (devicesWired) refreshDevicesBoard();
+      if (devicesWired) refreshLiveTables();
       // A quiet re-check that changed nothing says nothing.
       if (!again || !wasUp) say(lamps.length ? `${again ? 'The lamp bridge is back — found' : 'Found'} ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
     } catch { /* a broken bridge reply leaves the lamps as they are */ } finally { discovering = false; }
@@ -1596,18 +1663,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // (Lit) path carries per-click specifics in `metadata` (the A2UI
       // controller's calling convention for dynamic action data), the
       // fallback (plain-DOM) path puts the same thing straight in `context`.
+      // A table row's button only speaks: a table binds no device.
       if (a.name === 'table.rowAction') {
         const row = (a.context?.row ?? ext(a)?.row) as string[] | undefined;
         say(row ? `Opened ${row[0]}.` : 'Opened row.');
         return;
       }
+      const fid = sid.endsWith('-dock') ? sid.slice(0, -'-dock'.length) : sid;
+      // A form whose fields are bound to devices: one intent per bound field,
+      // all checked first (in the APPROVED plan), none sent on a refusal.
       if (a.name === 'form.submit') {
-        say('Form submitted.');
+        const r = formIntents(surfaces[fid], a.context?.formId, a.context?.values ?? ext(a)?.values, deviceOrStand);
+        if (!r) { say('Form submitted.'); return; }
+        if ('refusal' in r) { say(r.refusal); return; }
+        for (const i of r.intents) void actQueue.act(i);
+        say('Sent.');
         return;
       }
+      // A visual tile's data-action: only a key the approved plan binds runs
+      // a device; any other key just speaks its label, as before.
       if (a.name === 'visual.action') {
         const label = (a.context?.label ?? ext(a)?.label) as string | undefined;
         const action = (a.context?.action ?? ext(a)?.action) as string | undefined;
+        const bound = visualPress(surfaces[fid], a.context?.visualId, action, deviceOrStand);
+        if (bound) { applyPress(bound); return; }
         say(label ? `${label}.` : action ? `${action}.` : 'Activated.');
         return;
       }
@@ -1622,7 +1701,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // from Spotify first, never step from a guess.
     const unread = volumeReadNeeded(surfaces[frameId], press, (id) => store.get(id));
     if (unread) { withVolumeRead([unread], () => devicePress(frameId, press)); return; }
-    const r = pressIntent(surfaces[frameId], press, deviceOrStand, { spotifyConnected });
+    applyPress(pressIntent(surfaces[frameId], press, deviceOrStand, { spotifyConnected }));
+  }
+  /** A resolved press (a tile control, or a bound visual action): the device
+   *  lane, the gimbal path, or the refusal said and shown. */
+  function applyPress(r: BindingResult & { deviceId?: string }): void {
     if ('refusal' in r) {
       say(r.refusal);
       // The gimbal tile shows why on its own line (it is not a store device).
@@ -1682,7 +1765,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.
-      ...expandPlan(plan, id, store.all(), { heading: false, gimbal: gimbalState() }),
+      ...expandPlan(plan, id, store.all(), { heading: false, gimbal: gimbalState(), deviceRows: liveRowsFor(plan, id) }),
     ];
     const g = gateMessages(msgs, CATALOG_SCHEMAS);
     if (!g.ok) { say(`Blocked a board that did not pass the check: ${g.errors[0]}`, { speak: true }); return false; }
@@ -1860,7 +1943,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     nextChips?.refresh();
   }
 
-  const labelFor = (f: Frame) => (isDevicesFrame(f.id) ? 'Devices' : surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
+  const labelFor = (f: Frame) => (isDevicesBoard(surfaces[f.id]) ? 'Devices' : surfaces[f.id]?.kind === 'plan' || f.kind === 'plan' ? 'Floor plan' : surfaces[f.id] ? 'Room dashboard' : 'Empty');
 
   let zoomHud: ReturnType<typeof mountZoomHud> | null = null;
   /** The focused board's next-step chips stay visible: when the board runs
@@ -2043,24 +2126,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const kept = storedDrawings(drawings, livePlans);
     return { version: CANVAS_DOC_VERSION, camera, focusId, frames: reg.list(), surfaces: { ...surfaces }, lang: pack?.lang, pack: pack ?? undefined, ...(Object.keys(kept).length ? { drawings: kept } : {}) };
   }
-  /** What is stored: everything but the fixed "Connected devices" table, which
-   *  no model made and nobody approved (it is rebuilt from live facts; Task 8
-   *  replaces it with a generated board). */
-  function storedDoc(): CanvasDoc {
-    const doc = snapshot();
-    const dev = devicesBoardId();
-    if (!dev) return doc;
-    const surfacesKept = { ...doc.surfaces };
-    delete surfacesKept[dev];
-    return { ...doc, frames: doc.frames.filter((f) => f.id !== dev), surfaces: surfacesKept, focusId: doc.focusId === dev ? null : doc.focusId };
-  }
   function persist(now = false): boolean {
     clearTimeout(persistTimer);
     const write = (): boolean => {
       // The caller keeps the document (layout + artifacts); without one it
       // lives in memory for this page only.
       let ok = true;
-      if (opts.onPersist) { try { opts.onPersist(storedDoc()); } catch { ok = false; } }
+      if (opts.onPersist) { try { opts.onPersist(snapshot()); } catch { ok = false; } }
       tryWriteStorage(storage, DISMISSED_KEY, JSON.stringify(dismissals.toJSON((id) => !!reg.get(id))));
       return ok;
     };
@@ -2612,11 +2684,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const DEEP_ROOM_GOAL = 'Improve the current board: group the lights. No floor-plan tile: the floor plan has its own board.';
   /** The same goal for a board Gemini makes in ONE call (no draft to improve). */
   const ONE_CALL_ROOM_GOAL = 'Group the lights. No floor-plan tile: the floor plan has its own board.';
-  /** When the last AI turn (stream + its review) let go of the board. The
-   *  next-step pick stays away from the model for a while after that: a
-   *  timed-out Nano call can still be finishing inside Chrome. */
+  /** When the last AI turn (stream + its review) let go of the board. */
   let lastTurnEndedAt = 0;
-  const NEXT_PICK_COOLDOWN_MS = 10_000;
   /** The on-device model is loading back (it was evicted, or this is its
    *  first use): say so on the Nano card and in its terminal instead of
    *  looking stuck. Loading is not counted against Nano's reply budget. */
@@ -2682,8 +2751,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!engine) { noModel(engineId); return null; }
     let sentInfo: SentInfo | null = null;
     lastTurnHandedOff = false;
-    const want = task === 'floorplan' ? 'plan' as const : 'room' as const;
-    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices: want === 'room' ? [...roomDeviceHints(), ...standHints()] : deviceHints(), current, frameId, want }, engine, {
+    const want = task === 'floorplan' ? 'plan' as const : kind === 'devices' ? 'devices' as const : 'room' as const;
+    // A devices turn is told what each device reports (names and status
+    // words only); it writes the layout, and the table fills itself.
+    const devices = want === 'room' ? [...roomDeviceHints(), ...standHints()] : want === 'devices' ? [] : deviceHints();
+    const deviceRows = want === 'devices' ? liveDeviceRows().map(({ device, status, kind: k }) => ({ device, status, kind: k })) : undefined;
+    const plan = await withBuildGimbal(() => runSurfaceTurn({ utterance: goal ? `${utterance}. ${goal}` : utterance, frameTitle: f.title, devices, current, frameId, want, ...(deviceRows ? { deviceRows } : {}) }, engine, {
       onSent: (s) => { sentInfo = s; onSi?.(s); aiSent(utterance, s, { task, defer: true }); },
       onFallback: aiFellBack,
       onCloudSend: cloudSent,
@@ -2780,6 +2853,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
+  /** The class each bound device really is (null: not here). */
+  const classHere = (id: string) => deviceClassOf(id, deviceOrStand(id)) ?? null;
+  function recheckBindings(plan: SurfacePlan): { plan: SurfacePlan; notes: string[] } {
+    if (!planHasBindings(plan)) return { plan, notes: [] };
+    const r = coerceSurfacePlan(plan, { clsOf: classHere });
+    return r.ok ? { plan: r.value, notes: r.notes ?? [] } : { plan, notes: [] };
+  }
   /** Gate a plan, show the Proposal card, and apply only on keep (shared by
    *  the room/floor-plan turns and the connect turns). */
   async function proposePlan(frameId: string, utterance: string, proposed: SurfacePlan, si: SentInfo, summary: string, status: ProposalStatus, link?: FactsLink, madeBy = false, onlyPresent = true): Promise<boolean> {
@@ -2790,10 +2870,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // (A connect turn proposes the device it just found: not checked here.)
     const fitted = fitPlan(planForBoard(frameId, proposed));
     const present = onlyPresent ? dropAbsentDevices(fitted, deviceOrStand) : { plan: fitted, dropped: 0, mismatched: 0 };
-    const plan = present.plan;
+    // A visual action or form field bound to a device is checked against
+    // what that device really is now; one that names no device here goes.
+    const bound = recheckBindings(present.plan);
+    const plan = bound.plan;
     // What the checks left out is listed in the review itself (and logged).
     const leftOut = [...new Set([
       ...takeTurnNotes(),
+      ...bound.notes,
       ...(present.dropped ? [ABSENT_DEVICE_LINE] : []),
       ...(present.mismatched ? [WRONG_CLASS_LINE] : []),
     ])];
@@ -2806,7 +2890,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     await finishSwarm();
     panels.forEngine(si.engine).log(si.engine === 'gemini' ? 'replied' : 'done',
       tilesFilledLine(plan));
-    const check = gateMessages(expandPlan(plan, frameId, store.all()), CATALOG_SCHEMAS);
+    const check = gateMessages(expandPlan(plan, frameId, store.all(), { deviceRows: isDevicesBoard(plan) ? liveDeviceRows() : [] }), CATALOG_SCHEMAS);
     if (!check.ok) { ghost(frameId, null); say('Blocked a plan that did not pass the check.', { speak: true }); bodyLanguage('no'); return Promise.resolve(false); }
     aiPanel.querySelector('.mc-ai-state')!.textContent = 'Waiting for you. Nothing changes until you keep it.';
     // Where it actually ran (a phone's "Nano" step is really Deep in the cloud).
@@ -2827,6 +2911,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           if (!before && focusId === frameId) { const ff = reg.get(frameId); if (phoneShell) fitPhone(); else if (ff) { camera = focusCam(ff); applyCamera(); } }
           selfCheckTiles(frameId);
           built = true;
+          approvedChange(frameId);
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
           else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`); if (el) el.innerHTML = ''; }
@@ -2885,6 +2970,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       panels.showHandoff('nano', 'group the lights');
       await aiTurn(next.frameId, 'gemini', next.utterance, 'boardBetter', betterSummary, 'changed', 'dashboard', DEEP_ROOM_GOAL);
     }
+  }
+
+  /** "show my devices": Gemini lays out a board around a live devices table
+   *  (rows come from what each device reports, never from the reply), and
+   *  she reviews it like any board. Offline there is no such turn: Nano only
+   *  picks devices for a dashboard (nanoPlan.ts). */
+  async function devicesTurn(utterance: string): Promise<void> {
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (turnBusy) return;
+    if (!net.isOnline()) { say(DEVICES_OFFLINE_LINE, { speak: true }); return; }
+    if (!engineFor('gemini', 'devices')) { noModel('gemini'); return; }
+    const frameId = devicesTarget(focusId ?? lastFocus);
+    if (focusId !== frameId) { sync(); void focus(frameId); }
+    turnBusy = true;
+    turnNotes = [];
+    try {
+      const out = await streamTurn(frameId, 'gemini', utterance, 'devices', 'dashboard', undefined, surfaces[frameId] ?? null,
+        () => { void devicesTurn(utterance); });
+      if (!out) { settleSwarm(); ghost(frameId, null); return; }
+      if (!isDevicesBoard(out.plan)) {
+        settleSwarm(); ghost(frameId, null);
+        panels.forEngine(out.si.engine).fail(NO_LIVE_TABLE_LINE);
+        say(NO_LIVE_TABLE_LINE, { speak: true });
+        return;
+      }
+      await proposePlan(frameId, utterance, out.plan, out.si, `Show your devices: ${out.plan.title}`, 'guess');
+    } finally { turnBusy = false; lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
   async function connectRoom(frameId: string, utterance = 'connect everything in this room'): Promise<void> {
@@ -3050,6 +3162,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         void focus(id);
         finish(`Kept: ${summary}. Say “undo” to put it back.`);
         nextChips?.refresh();
+        approvedChange(id);
         bodyLanguage('yes');
       };
       const card = renderProposalCard(document, {
@@ -3186,8 +3299,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- connect a device: sheet (point / name / phone) + merge-on-keep turns ----
-  // No real model behind this page (none at all, or ?sim=1 replay): sim.
-  const simEnv = () => engineFor('gemini', 'board')?.sim ?? true;
 
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
@@ -3586,7 +3697,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function nameTurn(frameId: string, name: string): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const f = reg.get(frameId); if (!f) return;
-    const turn = byName(name, { frameTitle: f.title, sim: simEnv(), devices: deviceHints() });
+    // SIM only where SIM devices exist: a test build with ?sim=1 (simPhones).
+    const turn = byName(name, { frameTitle: f.title, sim: simPhones, devices: deviceHints() });
     if (!turn) { say(`Didn’t catch a device in “${name}” — try “lamp”, “speaker” or “fan”.`); return; }
     await connectTurn(frameId, name, turn, `Connect: ${turn.request.devices[0]?.label ?? 'device'}`, 'guess');
   }
@@ -3875,6 +3987,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         summary: next ? `Added ${next.lang === 'kn' ? 'Kannada' : next.lang}` : 'Reverted to English',
         kind: 'lang', packBefore: before, packAfter: next,
       });
+      if (focusId) approvedChange(focusId);
     }
     persist();
   }
@@ -4017,6 +4130,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         opts.onConnector?.(art.value);
         syncConnectorLabels();
         say('The lamp now runs on the connector you approved.', { speak: true });
+        if (focusId) approvedChange(focusId);
         bodyLanguage('yes');
       },
       onDrop: () => { reviewDialog.close(); say('Dropped. The lamp stays as it was.'); },
@@ -4756,7 +4870,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** Push the current gimbal state to every board that shows the tile. */
   function pushGimbal(): void {
-    if (devicesWired) refreshDevicesBoard();
+    if (devicesWired) refreshLiveTables();
     const g = gimbalState();
     for (const sid of live) {
       if (sid.endsWith('-dock') || !surfaces[sid] || !planHasGimbal(surfaces[sid])) continue;
@@ -4837,7 +4951,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   senseSubs.add(() => { pushGimbal(); });
   gimbalWired = true;
 
-  // ---- the Connected devices board (connectedDevices.ts): local, no AI ----
+  // ---- live devices tables (connectedDevices.ts): the rows, never the board ----
+  // A generated board may hold a table with `source: 'devices'`. Its rows are
+  // filled here from what each device really reports, at every render and
+  // whenever that changes; nothing a model wrote is ever shown as a row.
   /** What each device really reports right now. */
   function connectedInput(): ConnectedInput {
     const phones = pairFirst.phones();
@@ -4860,36 +4977,44 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
   }
   const phoneAnswering = (platform: string): boolean => Date.now() - (phoneSeenAt.get(platform) ?? -Infinity) <= PHONE_FRESH_MS;
-  function isDevicesFrame(id: string | null | undefined): boolean { return !!id && id === devicesFrame && !!reg.get(id); }
-  const devicesBoardId = (): string | null => (isDevicesFrame(devicesFrame) ? devicesFrame : null);
-  /** Rows changed (a phone joined/left, a lamp answered): redraw the board. */
-  function refreshDevicesBoard(): void {
-    const id = devicesBoardId();
-    if (!id || phoneShell) return;
-    const plan = connectedDevicesPlan(connectedDeviceRows(connectedInput()));
-    if (JSON.stringify(plan) === JSON.stringify(surfaces[id])) return;
-    surfaces[id] = plan;
-    renderSurface(id); persist();
+  /** The rows a live devices table shows now (only devices that are here). */
+  const liveDeviceRows = (): DeviceRow[] => presentDeviceRows(connectedInput());
+  /** What each live table last showed, per board: a change re-renders it. */
+  const liveShown = new Map<string, string>();
+  /** Rows changed (a phone joined or left, a lamp answered, a speaker came):
+   *  redraw each board with a live table. Nothing is stored: the rows are
+   *  never part of the board artifact. */
+  /** A board's live-table rows for this render ([] before the wiring exists,
+   *  or when the board has no live table). */
+  function liveRowsFor(plan: SurfacePlan, frameId: string): DeviceRow[] {
+    if (!liveTablesReady || !isDevicesBoard(plan)) return [];
+    const rows = liveDeviceRows();
+    liveShown.set(frameId, JSON.stringify(rows));
+    return rows;
   }
-  /** "connect devices": the Connected devices board, made or brought up. */
-  function ensureDevicesBoard(): string {
-    let id = devicesBoardId();
-    if (!id) {
-      id = reg.add('note', DEVICES_BOARD_TITLE).id; sync(); // its frame (and surface host) first
-      devicesFrame = id;
-      try { storage.setItem(DEVICES_BOARD_KEY, id); } catch { /* per-session only */ }
+  function refreshLiveTables(): void {
+    if (!liveTablesReady) return;
+    const sig = JSON.stringify(liveDeviceRows());
+    for (const f of reg.list()) {
+      if (!isDevicesBoard(surfaces[f.id])) { liveShown.delete(f.id); continue; }
+      if (liveShown.get(f.id) === sig) continue;
+      renderSurface(f.id);
     }
-    surfaces[id] = connectedDevicesPlan(connectedDeviceRows(connectedInput()));
-    renderSurface(id); sync(); persist();
-    if (focusId !== id) void focus(id);
-    return id;
+  }
+  /** Where "show my devices" goes: the board that already shows the devices
+   *  table, else the empty board she is on, else a new board. */
+  function devicesTarget(from: string | null): string {
+    const existing = reg.list().find((f) => isDevicesBoard(surfaces[f.id]));
+    if (existing) return existing.id;
+    if (from && reg.get(from) && !surfaces[from]?.tiles.length && reg.get(from)?.kind !== 'plan') return from;
+    return reg.add('note', DEVICES_TITLE).id;
   }
   /** Where "build the dashboard" / a room turn goes: the board she is on when
    *  it can be a dashboard (not the devices board, not a floor plan), else the
    *  existing dashboard, else an empty board she is on, else a new "Dashboard". */
   function dashboardTarget(from: string | null): string {
     const planBoard = (id: string) => surfaces[id]?.kind === 'plan' || reg.get(id)?.kind === 'plan' || reg.get(id)?.title === FLOOR_PLAN_TITLE;
-    const ok = (id: string | null | undefined): id is string => !!id && !!reg.get(id) && !isDevicesFrame(id) && !planBoard(id);
+    const ok = (id: string | null | undefined): id is string => !!id && !!reg.get(id) && !isDevicesBoard(surfaces[id]) && !planBoard(id);
     if (ok(from) && surfaces[from]?.tiles.length) return from;
     const existing = reg.list().find((f) => ok(f.id) && surfaces[f.id]?.kind === 'room' && surfaces[f.id]!.tiles.length);
     if (existing) return existing.id;
@@ -4897,8 +5022,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     return reg.add('room', DASHBOARD_TITLE).id;
   }
   let devicesWired = true;
+  liveTablesReady = true;
+  refreshLiveTables(); // boards drawn at boot get their rows now
   if (typeof window !== 'undefined' && !phoneShell) {
-    const devTimer = setInterval(() => { if (devicesBoardId()) refreshDevicesBoard(); }, 4000);
+    // A phone's answer goes stale with time alone (PHONE_FRESH_MS): look again.
+    const devTimer = setInterval(() => { refreshLiveTables(); }, 4000);
     addEventListener('pagehide', () => clearInterval(devTimer), { once: true });
   }
 
@@ -5025,7 +5153,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** An impossible request: Nano proposes (a recorded reply in ?sim=1), real
    *  validation refuses, Nano's terminal fails red, and nothing is applied. */
-  async function breakTurn(text: string, attempt: Attempt, frameId: string | null): Promise<void> {
+  async function breakTurn(text: string, attempt: Attempt): Promise<void> {
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     // Only a real on-device Nano (or the ?sim=1 replay) is asked. On a device
     // without Nano the "Nano" engine is Gemini in the cloud: her words would
@@ -5045,7 +5173,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     try {
       const r = await runBreakTurn(text, attempt, { engine, devices: deviceRefs(), panel: engine ? panels.forEngine('nano') : rulesPanel, say: (t) => { const st = aiPanel.querySelector('.mc-ai-state'); if (st) st.textContent = t; say(t, { speak: true }); } });
       if (r.refused) bodyLanguage('no');
-      if (r.refused && frameId) nextChips?.markDone(frameId, 'try-to-break');
     } finally {
       settleSwarm(); settleEngines(); autoHideAi();
       // A refusal is the check doing its job, not Nano being broken: the card
@@ -5187,7 +5314,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'planExtra': {
         const said = planBoard!.runExtra!(r.extra);
         say(said, { speak: true });
-        if (ranOn && planExtraRan(said)) nextChips?.markDone(ranOn, r.extra);
+        // A check that really ran moves the plan board on in the journey.
+        if (ranOn && r.extra === 'check' && planExtraRan(said)) { checkedBoards.add(ranOn); approvedChange(ranOn); }
         return true;
       }
       case 'canvas': {
@@ -5219,13 +5347,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'musicSearch':
         void actQueue.act({ deviceId: r.deviceId, playing: true, query: r.query });
         say(`Looking for ${r.query}…`);
-        if (ranOn) nextChips?.markDone(ranOn, 'play-music');
         return true;
       case 'device': {
         const dc = r.result;
         // An impossible level is refused by validation, never clamped.
         const attempt = impossibleAttempt(text, deviceRefs());
-        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        if (attempt) { void breakTurn(text, attempt); return true; }
         // "louder" / "softer" step from the speaker's real volume: read it
         // first when nothing has reported it, then parse again.
         if (dc.statusKey === 'louder' || dc.statusKey === 'softer') {
@@ -5257,16 +5384,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           if (line === okLine && saysWhere) return;
           say(line, { speak: true });
         });
-        if (ranOn && dc.intents.some((i) => i.playing === true)) nextChips?.markDone(ranOn, 'play-music');
         return true;
       }
       case 'connectDevices': {
-        // Phones first, on the Connected devices board; the dashboard review
-        // waits for "build the dashboard" (its own board).
-        const target = ensureDevicesBoard();
-        pairFrame = target;
+        // Phones first (pairing is fixed code); the dashboard review waits
+        // for "build the dashboard", and "show my devices" generates the
+        // devices board (a reviewed turn).
         void pairFirst.begin({ dashboard: r.dashboard }); return true;
       }
+      case 'showDevices': void devicesTurn(text); return true;
       case 'connectRoom': {
         // The dashboard is its own board: never the devices list or the floor plan.
         const target = dashboardTarget(focusId);
@@ -5293,7 +5419,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'openEnded': {
         // "add a control for the oven" with no oven connected: refused, not chatted about.
         const attempt = impossibleAttempt(text, deviceRefs());
-        if (attempt) { void breakTurn(text, attempt, ranOn); return true; }
+        if (attempt) { void breakTurn(text, attempt); return true; }
         break;
       }
     }
@@ -6179,33 +6305,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
   }
 
-  // Next-step chips: 2–3 journey steps at the foot of the focused board,
-  // picked by Nano on this device (else the rule list, labelled "Suggested").
-  // Each chip runs a phrase run() already routes. Desktop only.
+  // Next-step chips: at most three generated steps at the foot of the
+  // focused board, labelled with the engine that wrote them (requestSteps).
+  // A chip only says her words to run(). No engine, no chips. Desktop only.
   if (!phoneShell) nextChips = createNextStepChips({
     root: world,
     focused: () => {
       const f = focusId ? reg.get(focusId) : undefined;
       const el = f ? world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`) : null;
-      return f && el ? { id: f.id, el, board: boardForJourney(f, surfaces[f.id]) } : null;
+      const at = f ? journeyAt(f.id) : null;
+      return f && el && at ? { id: f.id, el, at } : null;
     },
-    ctx: () => ({
-      lang: pack?.lang ?? 'en', online: net.isOnline(), phones: pairFirst.phones().length, sim: !!opts.sim,
-      pairing: pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
-      devicesBoard: isDevicesFrame(focusId),
-      lampLabel: deviceRefs().find((d) => d.kind === 'lamp')?.label,
-      savedRoom: reg.list().some((f) => f.pinned && f.id !== focusId && surfaces[f.id]?.kind === 'room'),
-    }),
-    nano: async (prompt) => { const r = await pickNextStepsOnDevice(prompt); if (r == null) throw new Error('Nano not available'); return r; },
+    stepsFor,
     onRender: keepChipsVisible,
-    // Rules first: Nano reorders the chips only when she has been idle and no
-    // turn (or any other on-device prompt) is using the model.
-    // Never during a turn or its review, never while any model stream is
-    // out, and not for 10 s after a turn ended.
-    idle: { delayMs: NANO_PICK_IDLE_MS, ready: () => !turnBusy && !reviewBusy() && streamsOut === 0 && Date.now() - lastTurnEndedAt >= NEXT_PICK_COOLDOWN_MS && nanoQueue.idle() && document.visibilityState !== 'hidden' },
     run: (say) => { run(say); },
-    // A note line (feeds the AI monitor too); no turn running → no blinking cursor.
-    onNano: (line) => { const p = panels.forEngine('nano'); p.log('note', line); if (!turnBusy) p.setWorking(false); },
   });
 
   // A persisted language pack localizes the UI (and voice) on load, offline-safe.

@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { floorPlanTarget, FLOOR_PLAN_TITLE, liftLegacyPlanTiles, roomSummary, roomWithoutPlanTiles } from '../../src/canvas/planTruth';
-import { connectedDeviceRows, connectedDevicesPlan, DEVICES_BOARD_TITLE, NOT_ANSWERING, PHONE_FRESH_MS, TICK } from '../../src/canvas/connectedDevices';
-import { ruleSuggestions } from '../../src/canvas/nextSteps';
+import { connectedDeviceRows, liveRows, NOT_ANSWERING, PHONE_FRESH_MS, TICK } from '../../src/canvas/connectedDevices';
 import { journeyStepOf } from '../../src/canvas/journey';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
 
@@ -60,7 +59,7 @@ describe('(b) "draw the floor plan" goes to its own board', () => {
   });
 });
 
-describe('the Connected devices board', () => {
+describe('the live devices rows (the devices board itself is generated)', () => {
   it('ticks only devices that truly answer; plain words otherwise', () => {
     const rows = connectedDeviceRows({
       laptop: true,
@@ -70,12 +69,12 @@ describe('the Connected devices board', () => {
       speaker: { sim: false, spotifyTokens: true, playingOn: 'iPhone' },
     });
     expect(rows).toEqual([
-      { device: 'Laptop', status: 'This canvas', ok: true },
-      { device: 'iPhone', status: 'Paired · Gimbal: tracking you', ok: true },
-      { device: 'Nothing phone', status: 'Not paired', ok: false },
-      { device: 'Lamp', status: 'WiZ · answering', ok: true },
-      { device: 'Lamp 2', status: 'Not reachable', ok: false },
-      { device: 'Speaker', status: 'Spotify · iPhone', ok: true },
+      { device: 'Laptop', status: 'This canvas', ok: true, kind: 'Laptop' },
+      { device: 'iPhone', status: 'Paired · Gimbal: tracking you', ok: true, kind: 'Phone' },
+      { device: 'Nothing phone', status: 'Not paired', ok: false, kind: 'Phone' },
+      { device: 'Lamp', status: 'WiZ · answering', ok: true, kind: 'Lamp' },
+      { device: 'Lamp 2', status: 'Not reachable', ok: false, kind: 'Lamp' },
+      { device: 'Speaker', status: 'Spotify · iPhone', ok: true, kind: 'Speaker' },
     ]);
   });
   it('gimbal words, no stand, Chrome blocking, Spotify not connected, SIM never ticked', () => {
@@ -85,26 +84,22 @@ describe('the Connected devices board', () => {
       speaker: { sim: false, spotifyTokens: false, playingOn: '' },
     });
     expect(rows.find((r) => r.device === 'iPhone')?.status).toBe('Paired · Gimbal: no stand');
-    expect(rows.find((r) => r.device === 'Nothing phone')).toEqual({ device: 'Nothing phone', status: 'SIM · paired', ok: false });
+    expect(rows.find((r) => r.device === 'Nothing phone')).toMatchObject({ device: 'Nothing phone', status: 'SIM · paired', ok: false });
     expect(rows.find((r) => r.device === 'WiZ lamp')).toMatchObject({ ok: false, status: expect.stringMatching(/^Chrome is blocking/) });
-    expect(rows.find((r) => r.device === 'Speaker')).toEqual({ device: 'Speaker', status: 'Spotify not connected', ok: false });
+    expect(rows.find((r) => r.device === 'Speaker')).toMatchObject({ device: 'Speaker', status: 'Spotify not connected', ok: false });
     expect(connectedDeviceRows({ iphone: { sim: false, gimbal: 'ready' }, lamps: [{ label: 'Desk lamp', state: 'sim' }] }).filter((r) => r.ok).map((r) => r.device)).toEqual(['Laptop', 'iPhone']);
     expect(connectedDeviceRows({ iphone: { sim: false, gimbal: 'ready' }, lamps: [] })[1].status).toBe('Paired · Gimbal: docked');
   });
-  it('is one table; the tick is in the device cell', () => {
-    const plan = connectedDevicesPlan([{ device: 'Laptop', status: 'This canvas', ok: true }, { device: 'iPhone', status: 'Not paired', ok: false }]);
-    expect(plan.title).toBe(DEVICES_BOARD_TITLE);
-    expect(plan.tiles[0]).toMatchObject({ type: 'table', rows: [[`${TICK} Laptop`, 'This canvas'], ['iPhone', 'Not paired']] });
+  it('the tick is in the device cell of a live table', () => {
+    expect(liveRows('devices', ['device', 'status'], [{ device: 'Laptop', status: 'This canvas', ok: true }, { device: 'iPhone', status: 'Not paired', ok: false }]))
+      .toEqual([[`${TICK} Laptop`, 'This canvas'], ['iPhone', 'Not paired']]);
   });
-  it('the chips walk Connected devices → Build the dashboard → Draw the floor plan', () => {
+  it('a board with the live table is at the devices step', () => {
     const ctx = { lang: 'en', online: true, phones: 1, devicesBoard: true };
-    const at = journeyStepOf({ kind: 'room', tiles: [{ kind: 'table' }], pinned: false }, ctx);
-    expect(at).toBe('devices');
-    expect(ruleSuggestions(at, ctx).map((s) => s.label).slice(0, 2)).toEqual(['Build the dashboard', 'Draw the floor plan']);
-    expect(ruleSuggestions('dashboard', { lang: 'en', online: true, phones: 1 }).map((s) => s.id)).toContain('floorplan');
+    expect(journeyStepOf({ kind: 'room', tiles: [{ kind: 'table' }], pinned: false }, ctx)).toBe('devices');
   });
-  it('"connect devices" makes it; "build the dashboard" goes to its own board', () => {
-    expect(app).toMatch(/const target = ensureDevicesBoard\(\);\s*pairFrame = target;/);
+  it('"connect devices" only pairs; "build the dashboard" goes to its own board', () => {
+    expect(app).not.toMatch(/ensureDevicesBoard/);
     expect(app).toMatch(/const id = dashboardTarget\(focusId \?\? lastFocus\);/);
     expect(app).toMatch(/const target = dashboardTarget\(focusId\);/);
   });
@@ -114,8 +109,8 @@ describe('review fixes: honest rows over time', () => {
   it('a paired phone that stopped answering is not ticked', () => {
     expect(PHONE_FRESH_MS).toBe(45_000);
     const rows = connectedDeviceRows({ iphone: { sim: false, gimbal: 'tracking', answering: false }, android: { sim: false, answering: false }, lamps: [] });
-    expect(rows.find((r) => r.device === 'iPhone')).toEqual({ device: 'iPhone', status: NOT_ANSWERING, ok: false });
-    expect(rows.find((r) => r.device === 'Nothing phone')).toEqual({ device: 'Nothing phone', status: NOT_ANSWERING, ok: false });
+    expect(rows.find((r) => r.device === 'iPhone')).toMatchObject({ device: 'iPhone', status: NOT_ANSWERING, ok: false });
+    expect(rows.find((r) => r.device === 'Nothing phone')).toMatchObject({ device: 'Nothing phone', status: NOT_ANSWERING, ok: false });
     expect(connectedDeviceRows({ iphone: { sim: false, gimbal: 'ready', answering: true }, lamps: [] })[1].ok).toBe(true);
     // the canvas stamps a phone only on a LIVE announce, and forgets on disconnect
     expect(app).toMatch(/phoneSeenAt\.set\(platform, Date\.now\(\)\)/);
@@ -124,9 +119,8 @@ describe('review fixes: honest rows over time', () => {
   it('a lamp is "answering" only while the bridge is up', () => {
     expect(app).toMatch(/!bridgeStatus\.up \|\| d\.unreachable \|\| d\.sim \? 'unreachable'/);
   });
-  it('the devices board is the frame it was made as, not any board with that title', () => {
-    expect(app).not.toMatch(/isDevicesBoard\(/);
-    expect(app).toMatch(/devicesFrame = id;\s*try \{ storage\.setItem\(DEVICES_BOARD_KEY, id\); \}/);
+  it('a devices board is one that holds the live table, never one picked by its title', () => {
+    expect(app).not.toMatch(/DEVICES_BOARD_TITLE|devicesFrame/);
   });
 });
 

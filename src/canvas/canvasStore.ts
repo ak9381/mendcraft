@@ -18,11 +18,10 @@
 import { coerceLayoutReport, LAYOUT_KEY, splitCanvasDoc, type CanvasLayout } from './canvasPersistence';
 import type { CanvasDoc } from './frames';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
-import { isDevicesPlan } from './connectedDevices';
-import type { SurfacePlan } from './surfacePlan';
 
 export const CANVAS_STORAGE_KEY = LAYOUT_KEY;
-/** The devices-board frame id, kept beside the layout. */
+/** The old fixed devices board's frame marker: no longer written (the
+ *  devices board is generated now); ?fresh still clears an old one. */
 export const DEVICES_BOARD_KEY = 'mendcraft.devicesBoard';
 export const UNREADABLE_KEY = `${LAYOUT_KEY}.unreadable`;
 export const BEFORE_FRESH_KEY = `${LAYOUT_KEY}.beforeFresh`;
@@ -108,13 +107,6 @@ export function loadLayout(storage: Store | null, key: string = CANVAS_STORAGE_K
 export function loadLine(loaded: LoadedLayout): string | null {
   if (!loaded.unreadable) return null;
   return loaded.safe ? UNREADABLE_LINE : UNSAVED_LINE;
-}
-
-/** The devices-board frame from the key kept beside the layout — trusted
- *  only when that frame really holds the devices list (a stale key, or one
- *  whose id a new board later took, must never turn her board into it). */
-export function resolveDevicesBoard(surfaces: Record<string, SurfacePlan> | null | undefined, legacy: string | null): string | null {
-  return legacy && surfaces && isDevicesPlan(surfaces[legacy]) ? legacy : null;
 }
 
 /** ?fresh=1: copy the saved layout aside, then clear it (and the

@@ -4,7 +4,8 @@
 // next-step chips (nextSteps.ts) suggest what comes after it.
 import type { SurfacePlan, TileSpec } from './surfacePlan';
 
-export type JourneyStep = 'empty' | 'devices' | 'dashboard' | 'music' | 'saved' | 'floorplan' | 'checked' | 'language' | 'offline' | 'shared';
+export const JOURNEY_STEPS = ['empty', 'devices', 'dashboard', 'music', 'saved', 'floorplan', 'checked', 'language', 'offline', 'shared'] as const;
+export type JourneyStep = (typeof JOURNEY_STEPS)[number];
 
 export interface JourneyBoard { kind: string; tiles: { kind: string }[]; pinned: boolean }
 
@@ -20,7 +21,7 @@ export interface JourneyCtx {
   shared?: boolean;
   /** The pair-first connect flow is running (phones pairing / "what next?"). */
   pairing?: boolean;
-  /** The focused board is the Connected devices board. */
+  /** The focused board shows the live devices table (isDevicesBoard). */
   devicesBoard?: boolean;
 }
 
@@ -60,4 +61,13 @@ export function boardForJourney(frame: { kind: string; pinned: boolean }, surfac
   const tiles: { kind: string }[] = [];
   if (surface) leafKinds(surface.tiles, tiles);
   return { kind: surface?.kind ?? frame.kind, tiles, pinned: frame.pinned };
+}
+
+/** A board that shows the live devices table (a table with `source: 'devices'`). */
+export function isDevicesBoard(surface: SurfacePlan | undefined): boolean {
+  const walk = (tiles: readonly TileSpec[]): boolean => tiles.some((t) => (t.type === 'table' && t.source === 'devices')
+    || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && walk(t.children))
+    || (t.type === 'tabs' && t.tabs.some((tab) => walk(tab.children)))
+    || (t.type === 'split' && (walk(t.first) || walk(t.second))));
+  return !!surface && walk(surface.tiles);
 }

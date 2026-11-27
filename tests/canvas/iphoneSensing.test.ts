@@ -5,13 +5,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS } from '../../src/canvas/phoneCamera';
-import { pairedRowHtml, isBuildDashboard, type PairedPhone } from '../../src/canvas/pairedRow';
+import { pairedRowHtml, type PairedPhone } from '../../src/canvas/pairedRow';
 import {
   CAMERA_TRACKING_ROW, CAMERA_UNAVAILABLE_ROW, coercePointResult, coerceSenseStatus, encodePointResult, FACING_ROW, FOLLOWING_HANDS_ROW, NOT_FACING_ROW, GIMBAL_READY_ROW, HANDS_ON_ROW,
   NO_GIMBAL_CAN_POINT_ROW, NO_GIMBAL_ROW, phoneSubState, DIAG_AIMING_NO, DIAG_AIMING_YES, DIAG_SIGN, DIAG_TRACKING_OFF, DIAG_TRACKING_ON, TRACKING_ROW, type PhoneSenseStatus,
 } from '../../src/canvas/phonePoint';
-import { ruleSuggestions } from '../../src/canvas/nextSteps';
-import { routeLine } from '../../src/canvas/routeLine';
 import {
   LAMP_OR_SPEAKER_QUESTION, pickPointChoice, pointConnectFromIdentity, SPEAKER_ADDED_GENERIC_NOTE, SPEAKER_ADDED_NOTE, SPEAKER_ON_BOARD,
 } from '../../src/canvas/connectTurns';
@@ -107,20 +105,6 @@ describe('connect-devices row: iPhone sub-states', () => {
     expect(coerceSenseStatus({ platform: 'ios' })).toBeNull();
     expect(coerceSenseStatus({ gimbal: 'following' })).toBeNull();
     expect(coerceSenseStatus(null)).toBeNull();
-  });
-});
-
-describe('"What do you want to connect next?" chips', () => {
-  const world = { hasPlanBoard: false, devices: [] };
-  it('after pairing: Point at a device, Name a device, Build the dashboard — each routes', () => {
-    const steps = ruleSuggestions('devices', { lang: 'en', online: true, phones: 2, pairing: true, asking: true });
-    expect(steps.map((s) => s.label)).toEqual(['Point at a device', 'Name a device', 'Build the dashboard']);
-    expect(routeLine(steps[0]!.say, world).name).toBe('pointConnect');
-    expect(routeLine(steps[1]!.say, world).name).toBe('connectSheet');
-    expect(isBuildDashboard(steps[2]!.say)).toBe(true);
-  });
-  it('while still pairing: unchanged', () => {
-    expect(ruleSuggestions('devices', { lang: 'en', online: true, phones: 0, pairing: true }).map((s) => s.id)).toEqual(['build-dashboard', 'connect-device']);
   });
 });
 

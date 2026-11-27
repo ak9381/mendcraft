@@ -245,12 +245,11 @@ async function phones(page) {
   }
   if (process.env.E2E_TIMING) console.log(`     review opened ${Date.now() - buildAt} ms after "build the dashboard"`);
   check((await page.evaluate(reviewText)).includes('Replay'), 'the dashboard review names "Replay"');
-  // Pairing still opens the fixed "Connected devices" table (Task 8 replaces
-  // it with a generated board). It is on the canvas but never stored.
-  check((await frames(page)).some((f) => f.title === 'Connected devices'), 'pairing shows the Connected devices table');
+  // Pairing makes no fixed devices table: the devices board is generated ("show my devices").
+  check(!(await frames(page)).some((f) => f.title === 'Connected devices'), 'pairing makes no fixed devices table');
   await sleep(1200); // past the save debounce
   const early = await boardArtifacts(page);
-  check(early.length === 0, `nothing is stored until Approve, not even the devices table (got ${JSON.stringify(early.map((a) => a.title))})`);
+  check(early.length === 0, `nothing is stored until Approve (got ${JSON.stringify(early.map((a) => a.title))})`);
   await page.evaluate(() => window.__mcCanvas.keep());
   if (!(await waitFor(page, () => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelectorAll('[data-act=chip]').length >= 3), 10_000, 'the dashboard is on the laptop'))) return;
   await sleep(1200); // past the save debounce: the board is stored with its maker
@@ -341,6 +340,75 @@ async function phones(page) {
   check(!!pinnedL && pinnedL.v > dash.v && pinnedL.data.frame.pinned && pinnedL.by === 'replay', `laptop: pinned after a reload, still by replay (got ${JSON.stringify(pinnedL && [pinnedL.v, pinnedL.data.frame.pinned, pinnedL.by])})`);
 }
 SECTIONS.phones = phones;
+
+// ---- devices: the devices board is generated around a live table; the next-step chips are generated ----
+/** The live table's rows on the laptop, one string per row ("cell | cell"). */
+const liveTableRows = () => [...document.querySelectorAll('mc-table-tile')]
+  .filter((t) => t.shadowRoot?.querySelector('[data-live]'))
+  .flatMap((t) => [...t.shadowRoot.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent.trim()).join(' | ')));
+const chipRow = () => {
+  const r = document.querySelector('.mc-next');
+  return r ? { label: r.querySelector('.mc-next-src')?.textContent.trim() ?? '', chips: [...r.querySelectorAll('.mc-next-chip')].map((c) => c.textContent.trim()) } : null;
+};
+const SPEAKER_SIM = { cls: 'music', on: false, brightness: 0, playing: false, volume: 50, sim: true };
+
+async function devices(page) {
+  await page.evaluateOnNewDocument((id) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices: [{ id, cls: 'lamp', label: 'Lamp' }] }; }, LAMP_ID);
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two SIM phones join'))) return;
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
+  check(!(await frames(page)).some((f) => /Connected devices/.test(f.title)), 'pairing alone makes no devices board');
+
+  await page.evaluate(() => window.__mcCanvas.run('show my devices'));
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the devices review opens'))) return;
+  check((await page.evaluate(reviewText)).includes('Replay · written example'), 'the devices review names "Replay · written example"');
+  const notes = await page.evaluate(reviewNotes);
+  check(notes.includes("Dropped 1 column a live devices table can't show."), `the review says the ip column was dropped (got ${JSON.stringify(notes)})`);
+  await sleep(1200);
+  check((await boardArtifacts(page)).length === 0, 'nothing is stored until Approve');
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => document.querySelectorAll('mc-table-tile').length > 0, 10_000, 'the devices board is on the canvas'))) return;
+  await waitFor(page, () => [...document.querySelectorAll('mc-table-tile')].flatMap((t) => [...(t.shadowRoot?.querySelectorAll('tbody tr') ?? [])]).length === 3, 8_000, 'the live table has 3 rows');
+  const rows3 = await page.evaluate(liveTableRows);
+  check(rows3.length === 3, `3 rows: two SIM phones and the SIM lamp (got ${JSON.stringify(rows3)})`);
+  check(rows3.some((r) => r.startsWith('iPhone | SIM')) && rows3.some((r) => r.startsWith('Nothing phone | SIM')) && rows3.some((r) => r === 'Lamp | SIM lamp'), 'the rows name the phones and the lamp, each SIM');
+  check(rows3.every((r) => !r.startsWith('✓')), 'no SIM device is ticked');
+  check(!(await page.evaluate(() => document.body.innerText + [...document.querySelectorAll('mc-table-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' '))).match(/Fridge|Oven/), "the reply's made-up rows are never shown");
+  await sleep(1200);
+  const stored = await boardArtifacts(page);
+  const liveTable = stored[0]?.data.plan.tiles[0]?.children?.[0];
+  check(stored.length === 1 && stored[0].by === 'replay' && liveTable?.source === 'devices' && liveTable.rows.length === 0,
+    `the board is stored by replay with a live table and no rows (got ${JSON.stringify(stored.map((a) => [a.by, a.data.plan.tiles[0]]))})`);
+
+  // A speaker joins: no turn, no review.
+  await page.evaluate((s) => window.__mcCanvas.store.add('speaker-sim', s), SPEAKER_SIM);
+  await waitFor(page, () => [...document.querySelectorAll('mc-table-tile')].flatMap((t) => [...(t.shadowRoot?.querySelectorAll('tbody tr') ?? [])]).length === 4, 8_000, 'the speaker appears as a 4th row');
+  const rows4 = await page.evaluate(liveTableRows);
+  check(rows4.length === 4 && rows4.includes('Speaker | SIM · simulated speaker'), `4 rows with the SIM speaker (got ${JSON.stringify(rows4)})`);
+  check(!(await page.evaluate(reviewOpen)), 'no review for a device that joined');
+
+  // The next-step chips: generated by (replayed) Nano after the approval, labelled so.
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-next .mc-next-chip').length === 3, 8_000, 'three next-step chips appear'))) return;
+  const chips = await page.evaluate(chipRow);
+  check(chips?.chips.length === 3 && chips.label === 'Replay · written example', `three chips labelled "Replay · written example" (got ${JSON.stringify(chips)})`);
+  const steps = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.filter((a) => a.kind === 'steps').map((a) => ({ id: a.id, by: a.by, n: a.data.steps.length }))));
+  check(steps.length === 1 && steps[0].id === 'steps-devices' && steps[0].by === 'replay' && steps[0].n === 3, `the steps are kept as steps-devices by replay (got ${JSON.stringify(steps)})`);
+  // A chip says her words: "connect a device" opens the connect sheet.
+  const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  await page.evaluate(() => [...document.querySelectorAll('.mc-next-chip')].find((c) => c.textContent.trim() === 'Connect a device')?.click());
+  await sleep(600);
+  check(!(await page.evaluate(reviewOpen)), `a chip press opens no review by itself (said ${JSON.stringify(await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark))})`);
+
+  // After a reload: the board and its chips come back; the rows are today's.
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, () => document.querySelectorAll('mc-table-tile').length > 0, 10_000, 'the devices board is back after a reload');
+  await waitFor(page, () => [...document.querySelectorAll('mc-table-tile')].flatMap((t) => [...(t.shadowRoot?.querySelectorAll('tbody tr') ?? [])]).length === 1, 8_000, 'after a reload only the lamp is here (no phones paired)');
+  const back = await page.evaluate(liveTableRows);
+  check(JSON.stringify(back) === JSON.stringify(['Lamp | SIM lamp']), `after a reload the rows are what is here now (got ${JSON.stringify(back)})`);
+  await waitFor(page, () => document.querySelectorAll('.mc-next .mc-next-chip').length === 3, 8_000, 'the kept chips are back after a reload');
+}
+SECTIONS.devices = devices;
 
 // ---- speaker: a generated speaker tile drives a (simulated) speaker through the same checked binding ----
 const SPEAKER_ID = 'speaker-sim';

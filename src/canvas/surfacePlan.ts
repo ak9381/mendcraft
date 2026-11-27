@@ -2,8 +2,9 @@
 // upgrades. Models never write raw A2UI: they emit this small JSON, which is
 // coerced here and expanded deterministically into A2UI v0.9 messages.
 import { sanitizeVisualMarkup } from './visualSanitize';
-import { coerceControls, standardControls, type ControlSpec } from './controlSpec';
+import { coerceBinding, coerceControls, standardControls, GIMBAL_DEVICE_ID, type Binding, type ControlSpec } from './controlSpec';
 import type { DeviceClass } from './deviceGuard';
+import { coerceDeviceFields, DEVICE_FIELD_NAMES, liveRows, type DeviceField, type DeviceRow } from './connectedDevices';
 
 export const PROTOCOL = 'v0.9' as const;
 export const ROOM_CATALOG_ID = 'https://mendcraft.web.app/catalogs/smart-canvas/v0.json';
@@ -23,10 +24,22 @@ export type ChartType = (typeof CHART_TYPES)[number];
 export const TREND_KINDS = ['up', 'down', 'neutral'] as const;
 export type TrendKind = (typeof TREND_KINDS)[number];
 
+/** A form field that drives a device on submit: a toggle binds `on`, a
+ *  slider a level. Resolved through bindingIntent, like a tile press. */
+export type FormBindKey = 'on' | 'brightness' | 'volume' | 'temp';
+export interface FormBind { deviceId: string; key: FormBindKey }
 export type FormField =
-  | { kind: 'toggle'; id: string; label: string; value?: boolean }
-  | { kind: 'slider'; id: string; label: string; value?: number; min?: number; max?: number }
+  | { kind: 'toggle'; id: string; label: string; value?: boolean; bind?: FormBind }
+  | { kind: 'slider'; id: string; label: string; value?: number; min?: number; max?: number; bind?: FormBind }
   | { kind: 'choice'; id: string; label: string; options: string[]; value?: string };
+/** At most this many bound actions on one visual tile. */
+export const MAX_VISUAL_ACTIONS = 8;
+/** A visual action key (a data-action value). */
+export const ACTION_KEY_RE = /^[a-z][a-z0-9-]{0,23}$/;
+/** What a binding's device is, when the caller knows (generation and review
+ *  read the device store); null = not a device here. */
+export type ClassOf = (deviceId: string) => DeviceClass | null;
+export interface CoerceOptions { clsOf?: ClassOf }
 
 export type LeafTileSpec =
   /** Device leaves carry the controls the model designed (checked by
@@ -44,9 +57,14 @@ export type LeafTileSpec =
   | { type: 'gimbal'; label?: string; controls?: ControlSpec[] }
   | { type: 'stat'; label: string; value: string; delta?: string; trend?: TrendKind; spark?: number[] }
   | { type: 'chart'; title: string; chartType: ChartType; series: { label: string; value: number }[] }
-  | { type: 'table'; title: string; columns: string[]; rows: string[][]; sortable?: boolean; rowActionLabel?: string }
+  /** `source: 'devices'`: a live table. Its rows are filled from what each
+   *  device really reports (connectedDevices.ts) at every render; the
+   *  model's rows are never kept, and `columns` follow `fields`. */
+  | { type: 'table'; title: string; columns: string[]; rows: string[][]; sortable?: boolean; rowActionLabel?: string; source?: 'devices'; fields?: DeviceField[] }
   | { type: 'form'; title: string; fields: FormField[]; submitLabel: string }
-  | { type: 'visual'; title: string; markup: string };
+  /** `actions`: data-action key → the device binding it runs (checked at
+   *  coerce against the device's class, again at press). */
+  | { type: 'visual'; title: string; markup: string; actions?: Record<string, Binding> };
 
 export type TileSpec =
   | LeafTileSpec
@@ -146,20 +164,50 @@ function finiteNumber(v: unknown, fallback: number): number {
 
 type TileResult = { ok: true; value: TileSpec | null } | { ok: false; error: string };
 
-function coerceFormField(raw: unknown): FormField | null {
+const BIND_KEYS: readonly FormBindKey[] = ['on', 'brightness', 'volume', 'temp'];
+
+/** Every class a binding could mean, when the caller cannot say which device
+ *  is here (a load, a relay): the press checks the real class again. */
+const anyClassBinding = (raw: unknown): Binding | null => {
+  const id = raw && typeof raw === 'object' ? (raw as { deviceId?: unknown }).deviceId : undefined;
+  const classes: DeviceClass[] = id === GIMBAL_DEVICE_ID ? ['gimbal'] : ['lamp', 'music', 'switch'];
+  for (const cls of classes) { const b = coerceBinding(raw, () => cls); if (b) return b; }
+  return null;
+};
+const bindingOf = (raw: unknown, clsOf?: ClassOf): Binding | null => (clsOf ? coerceBinding(raw, clsOf) : anyClassBinding(raw));
+
+/** A field's `bind`: the key fits the field (a toggle is on/off, a slider a
+ *  level) and the device's class owns it. Anything else drops the bind. */
+function coerceFormBind(raw: unknown, kind: 'toggle' | 'slider', clsOf?: ClassOf): FormBind | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const key = o.key as FormBindKey;
+  if (!BIND_KEYS.includes(key) || (kind === 'toggle') !== (key === 'on')) return null;
+  const b = bindingOf({ deviceId: o.deviceId, intent: { [key]: key === 'on' ? 'toggle' : { step: 1 } } }, clsOf);
+  return b ? { deviceId: b.deviceId, key } : null;
+}
+
+function coerceFormField(raw: unknown, clsOf: ClassOf | undefined, count: { dropped: number }): FormField | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const id = typeof o.id === 'string' && ID_RE.test(o.id) ? o.id : null;
   const label = cleanText(o.label, 40);
   if (!id || !label) return null;
-  if (o.kind === 'toggle') return { kind: 'toggle', id, label, value: !!o.value };
+  const bindOf = (kind: 'toggle' | 'slider'): { bind?: FormBind } => {
+    if (o.bind === undefined) return {};
+    const b = coerceFormBind(o.bind, kind, clsOf);
+    if (!b) { count.dropped++; return {}; }
+    return { bind: b };
+  };
+  if (o.kind === 'toggle') return { kind: 'toggle', id, label, value: !!o.value, ...bindOf('toggle') };
   if (o.kind === 'slider') {
     const min = finiteNumber(o.min, 0);
     const max = finiteNumber(o.max, 100);
     const value = finiteNumber(o.value, min);
-    return { kind: 'slider', id, label, min, max, value: Math.min(Math.max(value, min), max) };
+    return { kind: 'slider', id, label, min, max, value: Math.min(Math.max(value, min), max), ...bindOf('slider') };
   }
   if (o.kind === 'choice') {
+    if (o.bind !== undefined) count.dropped++; // a choice drives no device
     const options = cleanTextList(o.options, 8, 24);
     if (!options.length) return null;
     const value = typeof o.value === 'string' && options.includes(o.value) ? o.value : options[0];
@@ -202,7 +250,7 @@ function leafControls(o: Record<string, unknown>, cls: 'lamp' | 'music' | 'switc
 /** Said when a reply puts the gimbal on one board twice. */
 export const SECOND_GIMBAL_NOTE = 'Dropped a second gimbal tile: there is one stand.';
 
-function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }, notes: string[]): TileResult {
+function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n: number }, notes: string[], clsOf?: ClassOf): TileResult {
   counter.n++;
   if (counter.n > MAX_NODES) return { ok: false, error: `too many nodes (> ${MAX_NODES})` };
   if (depth > MAX_DEPTH) return { ok: false, error: `nesting too deep (> ${MAX_DEPTH})` };
@@ -213,7 +261,7 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     if (!Array.isArray(list)) return { ok: false, error: `${label} needs a list of children` };
     const out: TileSpec[] = [];
     for (const c of list) {
-      const r = coerceTile(c, depth + 1, seen, counter, notes);
+      const r = coerceTile(c, depth + 1, seen, counter, notes, clsOf);
       if (!r.ok) {
         if (isFatalTileError(r.error)) return r;
         notes.push(`Dropped a tile: ${r.error}`);
@@ -281,6 +329,16 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     if (!series.length) return { ok: false, error: 'chart tile needs at least one data point' };
     return { ok: true, value: { type: 'chart', title, chartType, series } };
   }
+  if (o.type === 'table' && o.source !== undefined) {
+    // A live table: the rows are what each device reports, filled at render.
+    if (o.source !== 'devices') return { ok: false, error: 'table source must be "devices"' };
+    const title = cleanText(o.title, 40);
+    if (!title) return { ok: false, error: 'table tile needs a title' };
+    const { fields, dropped } = coerceDeviceFields(o.fields);
+    if (dropped) notes.push(`Dropped ${dropped} column${dropped === 1 ? '' : 's'} a live devices table can't show.`);
+    const rowActionLabel = cleanText(o.rowActionLabel, 24) ?? undefined;
+    return { ok: true, value: { type: 'table', title, columns: fields.map((f) => DEVICE_FIELD_NAMES[f]), rows: [], sortable: !!o.sortable, ...(rowActionLabel ? { rowActionLabel } : {}), source: 'devices', fields } };
+  }
   if (o.type === 'table') {
     const title = cleanText(o.title, 40);
     const columns = cleanTextList(o.columns, 8, 24);
@@ -296,8 +354,10 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
   if (o.type === 'form') {
     const title = cleanText(o.title, 40);
     if (!title) return { ok: false, error: 'form tile needs a title' };
-    const fields = (Array.isArray(o.fields) ? o.fields.slice(0, 8) : []).map(coerceFormField).filter((f): f is FormField => f !== null);
+    const count = { dropped: 0 };
+    const fields = (Array.isArray(o.fields) ? o.fields.slice(0, 8) : []).map((f) => coerceFormField(f, clsOf, count)).filter((f): f is FormField => f !== null);
     if (!fields.length) return { ok: false, error: 'form tile needs at least one field' };
+    if (count.dropped) notes.push(`Dropped ${count.dropped} form link${count.dropped === 1 ? '' : 's'} to a device that can't do that.`);
     const submitLabel = cleanText(o.submitLabel, 24) ?? 'Submit';
     return { ok: true, value: { type: 'form', title, fields, submitLabel } };
   }
@@ -312,7 +372,19 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
     // (belt and suspenders — see widgets.ts/fallbackRenderer.ts).
     const markup = sanitizeVisualMarkup(rawMarkup).html;
     if (!markup) return { ok: false, error: 'visual tile markup had nothing safe left after sanitizing' };
-    return { ok: true, value: { type: 'visual', title, markup } };
+    // Bound actions: a key the markup's data-action may name, and the device
+    // intent it runs. A key or binding that fails is dropped and counted.
+    const actions: Record<string, Binding> = {};
+    let dropped = 0;
+    if (o.actions !== undefined) {
+      if (!o.actions || typeof o.actions !== 'object' || Array.isArray(o.actions)) dropped++;
+      else for (const [k, v] of Object.entries(o.actions as Record<string, unknown>)) {
+        const b = Object.keys(actions).length < MAX_VISUAL_ACTIONS && ACTION_KEY_RE.test(k) ? bindingOf(v, clsOf) : null;
+        if (b) actions[k] = b; else dropped++;
+      }
+    }
+    if (dropped) notes.push(`Dropped ${dropped} visual action${dropped === 1 ? '' : 's'} a device can't do.`);
+    return { ok: true, value: { type: 'visual', title, markup, ...(Object.keys(actions).length ? { actions } : {}) } };
   }
   if (o.type === 'row') {
     const children = coerceChildren(o.children, 'row');
@@ -363,16 +435,16 @@ function coerceTile(raw: unknown, depth: number, seen: Set<string>, counter: { n
 
 /** Untrusted model output -> ONE valid tile (the morph patch path): the same
  *  per-tile validation coerceSurfacePlan runs, over a single node tree. */
-export function coerceTileSpec(raw: unknown): Coerced<TileSpec> {
+export function coerceTileSpec(raw: unknown, o: CoerceOptions = {}): Coerced<TileSpec> {
   const notes: string[] = [];
-  const res = coerceTile(raw, 1, new Set(), { n: 0 }, notes);
+  const res = coerceTile(raw, 1, new Set(), { n: 0 }, notes, o.clsOf);
   if (!res.ok) return res;
   if (!res.value) return { ok: false, error: notes[0] ?? 'tile had no valid content' };
   return notes.length ? { ok: true, value: res.value, notes } : { ok: true, value: res.value };
 }
 
 /** Untrusted model output -> a valid SurfacePlan, or a reason it was refused. */
-export function coerceSurfacePlan(raw: unknown): Coerced<SurfacePlan> {
+export function coerceSurfacePlan(raw: unknown, o: CoerceOptions = {}): Coerced<SurfacePlan> {
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'not an object' };
   const r = raw as Record<string, unknown>;
   if (r.kind !== 'room' && r.kind !== 'plan') return { ok: false, error: `unknown kind ${String(r.kind)}` };
@@ -384,7 +456,7 @@ export function coerceSurfacePlan(raw: unknown): Coerced<SurfacePlan> {
   const counter = { n: 0 };
   const notes: string[] = [];
   for (const t of r.tiles) {
-    const res = coerceTile(t, 1, seen, counter, notes);
+    const res = coerceTile(t, 1, seen, counter, notes, o.clsOf);
     if (!res.ok) {
       if (isFatalTileError(res.error) || res.error.startsWith('too many tiles')) return res;
       notes.push(`Dropped a tile: ${res.error}`);
@@ -426,7 +498,8 @@ export function expandPlan(
   devices: Record<string, DeviceState>,
   /** heading: false leaves out the board-title heading (the canvas frame
    *  head already shows the same title). */
-  o: { heading?: boolean; gimbal?: GimbalTileState } = {},
+  /** deviceRows: what a live devices table shows (none = empty). */
+  o: { heading?: boolean; gimbal?: GimbalTileState; deviceRows?: readonly DeviceRow[] } = {},
 ): A2uiMessage[] {
   const components: Record<string, unknown>[] = [];
   const deviceData: Record<string, DeviceState> = {};
@@ -556,7 +629,9 @@ export function expandPlan(
         component: 'TableTile',
         title: t.title,
         columns: t.columns,
-        rows: t.rows,
+        // A live table never shows the model's rows: only what the devices report.
+        rows: t.source ? liveRows(t.source, t.fields ?? [], o.deviceRows ?? []) : t.rows,
+        live: !!t.source,
         sortable: !!t.sortable,
         rowActionLabel: t.rowActionLabel ?? '',
         onRowAction: { event: { name: 'table.rowAction', context: { tableId: id } } },
@@ -566,7 +641,8 @@ export function expandPlan(
         id,
         component: 'FormTile',
         title: t.title,
-        fields: t.fields,
+        // A field's device link stays in the approved plan: submit reads it there.
+        fields: t.fields.map((f) => { if (f.kind === 'choice' || !f.bind) return f; const { bind: _b, ...rest } = f; return rest; }),
         submitLabel: t.submitLabel,
         onSubmit: { event: { name: 'form.submit', context: { formId: id } } },
       });

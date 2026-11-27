@@ -178,6 +178,8 @@ export const TableTileApi = {
       title: z.string(),
       columns: z.array(z.string()),
       rows: z.array(z.array(z.string())),
+      /** Rows filled from what the devices report (a live devices table). */
+      live: z.boolean(),
       sortable: z.boolean(),
       rowActionLabel: z.string(),
       onRowAction: CommonSchemas.Action,

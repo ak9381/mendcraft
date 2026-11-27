@@ -51,6 +51,8 @@ export type Route =
   | { name: 'musicSearch'; query: string; deviceId: string }
   | { name: 'device'; result: DeviceCommandResult }
   | { name: 'connectDevices'; dashboard: boolean }
+  /** "show my devices": a generated board around the live devices table. */
+  | { name: 'showDevices' }
   | { name: 'connectRoom' }
   | { name: 'floorPlan' }
   | { name: 'planEdit' }
@@ -100,6 +102,9 @@ const ADD_TO_BOARD_RE = /\badd\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;
 /** "add the gimbal", "add gimbal controls", "show the gimbal tile", "gimbal controls". */
 const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?gimbal(?:\s+(?:controls?|tile|buttons?))?(?:\s+(?:here|(?:on|to)\s+(?:the|this|my)\s+(?:board|dashboard)))?|(?:the\s+)?gimbal\s+controls?)(?:\s+please)?\s*[.!?]*\s*$/i;
+/** "show my devices", "list the connected devices", "what's connected?". */
+const SHOW_DEVICES_RE = /^\s*(?:please\s+)?(?:(?:show|list)\s+(?:me\s+)?(?:all\s+)?(?:(?:my|the|our)\s+)?(?:connected\s+)?devices|what(?:'|’)?s\s+connected|what\s+is\s+connected)(?:\s+please)?\s*[.!?]*\s*$/i;
+export const isShowDevices = (text: string): boolean => SHOW_DEVICES_RE.test(text);
 export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);
 }
@@ -143,6 +148,7 @@ export function routeLine(text: string, world: RouteWorld): Route {
   // "show me a dashboard for my lights" asks for a board to be built — before
   // the canvas "show …" commands, which would take it for navigation.
   if (SHOW_ME_BOARD_RE.test(text)) return { name: 'connectRoom' };
+  if (isShowDevices(text)) return { name: 'showDevices' };
   const cmd = parseCanvasCommand(text);
   if (cmd) return { name: 'canvas', cmd };
   // "play <something>" on a speaker: a search for the speaker connector.

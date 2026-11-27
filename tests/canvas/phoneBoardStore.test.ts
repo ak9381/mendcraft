@@ -140,15 +140,11 @@ describe('the laptop sends only a board that says who made it', () => {
     expect(snap?.boardBy).toBe('gemini');
   }, 15000);
 
-  it('the fixed Connected devices table is never stored', async () => {
+  it('pairing makes no fixed devices table: only her board is on the canvas and stored', async () => {
     const { h, saved } = await laptop('gemini');
-    expect(h.frames().some((f) => f.title === 'Connected devices')).toBe(true);
+    expect(h.frames().map((f) => f.title)).not.toContain('Connected devices');
     h.save();
     await vi.waitFor(() => expect(saved.length).toBeGreaterThan(0));
-    for (const d of saved) {
-      expect(d.frames.map((f) => f.title)).not.toContain('Connected devices');
-      expect(splitCanvasDoc(d, [], () => 'person', 1).put.map((a) => a.title)).not.toContain('Connected devices');
-    }
     expect(saved.at(-1)?.frames.map((f) => f.id)).toEqual(['f1']);
   }, 15000);
 });

@@ -18,7 +18,9 @@ export const BANNED = [/\bSTUB_DEVICES\b/, /\bseedDoc\b/, /\bSCRIPTS\b/, /\bSCRI
   /\bGIMBAL_MODE_BUTTONS\b/, /\bGIMBAL_CUE_BUTTONS\b/, /\bisAddGimbal\b/, /\bwithGimbalTile\b/,
   /\baddGimbalTile\b/, /\bgimbalReported\b/, /\baddGimbal\b/,
   // Task 7: floor plans are generated; the only plan template is blank.
-  /\btwoBedroom\b/, /\boneRoom\b/];
+  /\btwoBedroom\b/, /\boneRoom\b/,
+  // Task 8: the devices board and the next-step chips are generated.
+  /\bconnectedDevicesPlan\b/, /\bruleSuggestions\b/];
 
 /** Files a pattern may still appear in, with the reason. Nothing in the canvas. */
 const EXEMPT: { file: RegExp; re: RegExp; why: string }[] = [

@@ -281,6 +281,14 @@ handle = mountCanvas(root, {
     artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
     void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
   },
+  // Generated next-step suggestions (each checked again at load, in loadArtifacts).
+  steps: artifacts.filter((a) => a.kind === 'steps'),
+  onSteps: (a) => {
+    artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
+    // A store that could not be read is never written to this session.
+    if (loaded.readFailed) return;
+    void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
+  },
   dropped: loaded.dropped,
   loadNotes: loaded.notes,
   reservedFrameIds: reservedFrameIds(),

@@ -10,6 +10,7 @@ import { buildVisualDom } from './visualMount';
 import { rangeNudge, rangePresets, rangeStep } from './lampPresets';
 import { NOT_CONNECTED_BADGE, STANDARD_CONTROLS_NOTE, intentMatches, readoutText, sliderView, stateLine, tileActive, tileState } from './deviceTile';
 import type { ControlSpec } from './controlSpec';
+import { LIVE_TABLE_EMPTY, LIVE_TABLE_NOTE } from './connectedDevices';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -491,6 +492,17 @@ export function renderNodeToDom(
 
     const columns = Array.isArray(p.columns) ? (p.columns as string[]) : [];
     let rows = Array.isArray(p.rows) ? (p.rows as string[][]).slice() : [];
+    if (p.live) {
+      // A live devices table: say where the rows come from (and when there are none).
+      el.setAttribute('data-live', '');
+      for (const [text, attr] of [[LIVE_TABLE_NOTE, 'data-live-note'], ...(rows.length ? [] : [[LIVE_TABLE_EMPTY, 'data-live-empty']])]) {
+        const n = doc.createElement('div');
+        n.className = 'label';
+        n.setAttribute(attr, '');
+        n.textContent = text;
+        el.appendChild(n);
+      }
+    }
     let sortCol: number | null = null;
     let sortAsc = true;
 

@@ -20,6 +20,7 @@ import {
   VisualTileApi,
 } from './catalogApi';
 import { ROOM_CATALOG_ID, type FormField } from './surfacePlan';
+import { LIVE_TABLE_EMPTY, LIVE_TABLE_NOTE } from './connectedDevices';
 import { createPlanController } from '../plan/controller';
 import { localize, resolveLanguage } from '../ai/language';
 import { NOTHING_TO_CHECK, accessibilityReport, browserDownload, exportPlanDxf, isPlanEmpty, type PlanExtra } from './planExtras';
@@ -490,6 +491,7 @@ export class TableTileElement extends A2uiLitElement<typeof TableTileApi> {
     :host { display: block; }
     .tile { border: 2px solid var(--border, #E4E0D8); border-radius: 16px; padding: 20px; display: grid; gap: 10px; background: var(--panel, #FFFFFF); font: 500 16px/1.3 system-ui, sans-serif; color: var(--text, #2B2B2B); }
     .label { color: var(--text-dim, #6E6A63); font-size: 15px; }
+    .live { color: var(--text-dim, #6E6A63); font-size: 14px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border, #E4E0D8); }
     button { font: inherit; min-height: 44px; border-radius: 10px; border: 2px solid var(--border, #E4E0D8); background: transparent; color: var(--text, #2B2B2B); cursor: pointer; }
@@ -504,8 +506,10 @@ export class TableTileElement extends A2uiLitElement<typeof TableTileApi> {
       const col = this.sortCol;
       rows = rows.slice().sort((a, b) => (this.sortAsc ? 1 : -1) * a[col].localeCompare(b[col]));
     }
-    return html`<div class="tile" role="group" aria-label=${String(p.title || 'Table')}>
+    return html`<div class="tile" role="group" aria-label=${String(p.title || 'Table')} ?data-live=${!!p.live}>
       <div class="label">${p.title}</div>
+      ${p.live ? html`<div class="live" data-live-note>${LIVE_TABLE_NOTE}</div>` : nothing}
+      ${p.live && !rows.length ? html`<div class="live" data-live-empty>${LIVE_TABLE_EMPTY}</div>` : nothing}
       <table>
         <thead><tr>
           ${columns.map((colLabel, ci) => html`<th>${p.sortable

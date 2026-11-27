@@ -9,6 +9,7 @@ import { sanitizePlanDoc } from '../canvas/planDocs';
 import { coerceLanguagePack } from '../canvas/languagePack';
 import { coerceConnector, slug, type ConnectorSource } from '../devices/connector';
 import { coerceIntentMapNotes } from '../devices/intentMap';
+import { coerceNextSteps } from '../canvas/nextSteps';
 
 export const ARTIFACT_KINDS = ['board', 'plan', 'connector', 'pack', 'steps'] as const;
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
@@ -140,9 +141,11 @@ function coerceConnectorData(data: Record<string, unknown>): Coerced<Record<stri
 }
 
 function coerceSteps(data: Record<string, unknown>): Coerced<Record<string, unknown>> {
-  // Loose until coerceNextSteps exists: a time and a list.
-  if (!fin(data.at) || !Array.isArray(data.steps)) return bad('steps need a time and a list');
-  return { ok: true, value: { at: data.at, steps: data.steps } };
+  const r = coerceNextSteps(data);
+  if (!r.ok) return bad(`the suggestions failed their check: ${r.error}`);
+  // A stored set is the one she was shown: a step that no longer passes is not quietly dropped.
+  if (r.notes?.length) return bad('a suggestion failed its check');
+  return { ok: true, value: { at: r.value.at, steps: r.value.steps } };
 }
 
 function coerceData(kind: ArtifactKind, data: Record<string, unknown>): Coerced<Record<string, unknown>> {
@@ -180,5 +183,6 @@ export function coerceArtifact(raw: unknown): Coerced<Artifact> {
   if (!d.ok) return d;
   if (k === 'plan' && id !== artifactId('plan', String(d.value.frameId), String(d.value.boardId))) return bad('the plan id does not match its board');
   if (k === 'connector' && id !== `connector-${slug((d.value.connector as { key: string }).key)}`) return bad('the connector id does not match its device');
+  if (k === 'steps' && id !== `steps-${String(d.value.at)}`) return bad('the suggestions id does not match their step');
   return { ok: true, value: { id, kind: k, v: v as number, title, data: d.value, by: by as ArtifactBy, at, status: 'approved' }, ...(d.notes?.length ? { notes: d.notes } : {}) };
 }

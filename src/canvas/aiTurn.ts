@@ -12,6 +12,7 @@ import { CloudCallError, explainCloudFailure } from '../ai/cloudErrors';
 import { buildNanoPlanRequest, buildNanoRepairPrompt, buildNanoRepairUser, parseNanoPlan, partialNanoPlan } from './nanoPlan';
 import { dropUnbackedClaims } from './planTruth';
 import { CONTROLS_SCHEMA_LINE } from './controlSpec';
+import { redactForCloud } from '../ai/redact';
 
 export type EngineId = 'nano' | 'gemini';
 
@@ -67,7 +68,10 @@ export interface StreamOptions {
 export type ReplyShape = 'board' | 'json' | 'text';
 
 export interface DeviceHint { id: string; label: string; kind: string; host?: string }
-export interface SurfaceRequest { utterance: string; frameTitle: string; devices: DeviceHint[]; current?: SurfacePlan | null; /** The board being filled (names its floor-plan tile). */ frameId?: string; /** What the turn is for, when the caller knows (else her words decide). */ want?: 'room' | 'plan' }
+export interface SurfaceRequest { utterance: string; frameTitle: string; devices: DeviceHint[]; current?: SurfacePlan | null; /** The board being filled (names its floor-plan tile). */ frameId?: string; /** What the turn is for, when the caller knows (else her words decide). */ want?: 'room' | 'plan' | 'devices';
+  /** A devices turn: what each device reports now (names and status words
+   *  only — no ids, no addresses), for the layout. The table fills itself. */
+  deviceRows?: readonly { device: string; status: string; kind?: string }[] }
 export interface SentInfo { engine: EngineId; prompt: string; sent: string | null; routeLine: string; sim: boolean; /** Gemini took over from the on-device model, and why. */ handoffWhy?: string }
 
 const TEMPLATE_UNION = PLAN_TEMPLATES.map((t) => `"${t}"`).join('|');
@@ -85,8 +89,10 @@ const LEAF_SCHEMA = [
   `{"type":"stat","label":string,"value":string,"delta":string,"trend":"up"|"down"|"neutral","spark":number[]}`,
   `{"type":"chart","title":string,"chartType":"bar"|"line"|"ring","series":[{"label":string,"value":number}]}`,
   `{"type":"table","title":string,"columns":string[],"rows":string[][],"sortable":boolean,"rowActionLabel":string}`,
-  `{"type":"form","title":string,"submitLabel":string,"fields":[{"kind":"toggle","id":string,"label":string,"value":boolean}|{"kind":"slider","id":string,"label":string,"value":number,"min":number,"max":number}|{"kind":"choice","id":string,"label":string,"options":string[],"value":string}]}`,
-  `{"type":"visual","title":string,"markup":string}`,
+  // A live table: the canvas fills its rows from what each device reports.
+  `{"type":"table","title":string,"source":"devices","fields":["device"|"status"|"kind"]}`,
+  `{"type":"form","title":string,"submitLabel":string,"fields":[{"kind":"toggle","id":string,"label":string,"value":boolean,"bind":Bind}|{"kind":"slider","id":string,"label":string,"value":number,"min":number,"max":number,"bind":Bind}|{"kind":"choice","id":string,"label":string,"options":string[],"value":string}]}`,
+  `{"type":"visual","title":string,"markup":string,"actions":{[dataAction:string]:{"deviceId":string,"intent":Intent}}}`,
 ].join('|');
 const CONTAINER_SCHEMA = [
   `{"type":"row","children":[Tile]}`,
@@ -97,10 +103,16 @@ const CONTAINER_SCHEMA = [
 ].join('|');
 /** The Tile grammar on its own — shared with the morph (single-tile) prompt. */
 export const TILE_SCHEMA_LINE = `Tile = ${LEAF_SCHEMA} | ${CONTAINER_SCHEMA}`;
+/** Optional device links on general widgets (checked like tile controls). */
+export const BINDINGS_LINE = 'Bind = {"deviceId":string,"key":"on"|"brightness"|"volume"|"temp"} (a toggle binds on; a slider a level). '
+  + 'visual.actions maps a data-action key (lowercase, at most 24 characters, at most 8 keys) to one device intent. Both are optional; leave them out unless she asks for it.';
 const SCHEMA_LINE = [
   `{"kind":"room"|"plan","title":string,"tiles":[Tile]}`,
   TILE_SCHEMA_LINE,
+  BINDINGS_LINE,
 ].join('\n');
+/** What a devices turn adds to the prompt. */
+export const DEVICES_TABLE_LINE = 'This board shows her devices. Include one {"type":"table","source":"devices"} tile: the canvas fills its rows from what each device really reports, now and whenever it changes. Do not write rows or statuses yourself.';
 
 export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: { sim?: boolean; deviceIdSession?: DeviceIdSession } = {}): SentInfo {
   // Real device ids never reach the cloud: Gemini only ever sees this
@@ -118,6 +130,11 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
     devices = redactDeviceIds(devices, ids, session);
     if (current) current = `\nCurrent board: ${redactDeviceIds(JSON.stringify(req.current), ids, session)}`;
   }
+  // A devices turn: the rows as words (names and status only), redacted for the cloud.
+  const rows = req.want === 'devices'
+    ? (req.deviceRows ?? []).map((r) => `- ${r.device}${r.kind ? ` (${r.kind})` : ''}: ${r.status}`).join('\n') || '- no devices here yet'
+    : '';
+  const rowsText = rows && engine === 'gemini' ? redactForCloud(rows).text : rows;
   const prompt = [
     'You build one board on a smart canvas. Reply with JSON only, matching:',
     SCHEMA_LINE,
@@ -127,12 +144,15 @@ export function buildSurfacePrompt(req: SurfaceRequest, engine: EngineId, opts: 
     'For a simple request, keep it simple and flat, like before. For a richer dashboard or app, compose row/grid/card/tabs/split with stat/chart/table/form/visual tiles.',
     'Never invent a device, a device count or a connection status: you are not given live device state, so no tile may claim what is connected or online.',
     'visual.markup is inline SVG/HTML that gets sanitized before it ever renders: no <script>, no event-handler attributes, no external urls. Mark a clickable region with a data-action attribute (and optionally data-label).',
+    ...(req.want === 'devices' ? [DEVICES_TABLE_LINE, `Devices here now (for the layout only):\n${rowsText}`] : []),
     `Board: ${req.frameTitle}`,
     `Devices in the room:\n${devices}${current}`,
     `She said: "${req.utterance}"`,
   ].join('\n');
   const sent = engine === 'gemini'
-    ? `your words, ${req.devices.length} device names${req.current ? ', the current board layout' : ''}. No camera frames, no device addresses.`
+    ? req.want === 'devices'
+      ? `your words, ${req.deviceRows?.length ?? 0} device names with their status${req.current ? ', the current board layout' : ''}. No device ids, no addresses.`
+      : `your words, ${req.devices.length} device names${req.current ? ', the current board layout' : ''}. No camera frames, no device addresses.`
     : null;
   const base = engine === 'nano' ? 'Nano · on device — nothing left this device' : 'Gemini · cloud — sent your words and device names to improve the layout';
   return { engine, prompt, sent, routeLine: opts.sim ? `SIM · ${base}` : base, sim: !!opts.sim };

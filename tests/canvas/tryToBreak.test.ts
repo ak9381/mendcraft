@@ -7,7 +7,6 @@ import { createDeviceStore } from '../../src/canvas/deviceActions';
 import type { DeviceRef } from '../../src/canvas/deviceCommands';
 import { routeLine } from '../../src/canvas/routeLine';
 import { VOLUME_RANGE_REFUSAL, detectAttempt, impossibleAttempt, runBreakTurn, validateAttempt, type Attempt, LAMP_RANGE_REFUSAL } from '../../src/canvas/tryToBreak';
-import { ruleSuggestions } from '../../src/canvas/nextSteps';
 
 const devices: DeviceRef[] = [
   { id: 'lamp-a', label: 'Desk lamp', kind: 'lamp', on: true, brightness: 60 },
@@ -53,23 +52,6 @@ describe('routing (existing routes)', () => {
   it('500% goes to the device route; the oven ask is open-ended', () => {
     expect(routeLine('set the desk lamp to 500% brightness', world).name).toBe('device');
     expect(routeLine('add a control for the oven', world).name).toBe('openEnded');
-  });
-  it('the saved step offers "Try to break it" after the floor plan, naming a lamp that exists', () => {
-    const ctx = { lang: 'en', online: true, phones: 0, lampLabel: 'Desk lamp' } as const;
-    const steps = ruleSuggestions('saved', ctx);
-    expect(steps[0].id).toBe('floorplan');
-    const chip = steps.find((s) => s.label === 'Try to break it')!;
-    expect(chip.say).toBe('set the desk lamp to 500% brightness');
-    expect(routeLine(chip.say, world).name).toBe('device');
-    expect(ruleSuggestions('dashboard', ctx).map((s) => s.id)).toEqual(['connect-speaker', 'save', 'floorplan']);
-  });
-  it('with no known lamp label the chip says "the lamp" and still routes to any lamp', () => {
-    const chip = ruleSuggestions('saved', { lang: 'en', online: true, phones: 0 }).find((s) => s.id === 'try-to-break')!;
-    expect(chip.say).toBe('set the lamp to 500% brightness');
-    const other = { hasPlanBoard: false, devices: [{ id: 'l1', label: 'Reading light', kind: 'lamp' as const }] };
-    expect(['device', 'openEnded']).toContain(routeLine(chip.say, other).name);
-    const a = detectAttempt(chip.say, other.devices)!;
-    expect(a).toMatchObject({ kind: 'brightness', deviceId: 'l1', level: 500 });
   });
 });
 

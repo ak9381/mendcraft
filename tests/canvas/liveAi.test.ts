@@ -842,15 +842,6 @@ describe('minors: stale streams stay silent; a busy Nano is said out loud', () =
 });
 
 describe('round 2: the next-step pick keeps away from a turn; ?nanoTrace=1', () => {
-  it('the pick is skipped during a turn, its review, any model stream, and for 10 s after a turn', async () => {
-    const { readFileSync } = await import('node:fs');
-    const src = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
-    const ready = src.slice(src.indexOf('idle: { delayMs: NANO_PICK_IDLE_MS, ready: () =>'), src.indexOf('idle: { delayMs: NANO_PICK_IDLE_MS, ready: () =>') + 320);
-    for (const gate of ['!turnBusy', '!reviewBusy()', 'streamsOut === 0', 'Date.now() - lastTurnEndedAt >= NEXT_PICK_COOLDOWN_MS', 'nanoQueue.idle()']) expect(ready).toContain(gate);
-    expect(src).toContain('const NEXT_PICK_COOLDOWN_MS = 10_000;');
-    expect(src.match(/lastTurnEndedAt = Date\.now\(\)/g)!.length).toBeGreaterThanOrEqual(2);
-  });
-
   /** A fake LanguageModel whose stream is driven by the test. */
   function steppedLm(clock: { t: number }, createMs = 2600) {
     const ctl: { push: (text: string) => void; end: () => void; fail: (e: Error) => void } = { push: () => undefined, end: () => undefined, fail: () => undefined };

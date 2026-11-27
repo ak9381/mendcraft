@@ -362,6 +362,100 @@ export function pressIntent(plan: SurfacePlan | undefined, press: DevicePress, g
   return { ...r, deviceId: hit.deviceId };
 }
 
+const BIND_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** An untrusted binding (a visual action): a device id, and one intent its
+ *  class owns with every literal checked. `clsOf` says what that device is
+ *  (null: not a device here). No '$value': a visual press carries no level. */
+export function coerceBinding(raw: unknown, clsOf: (deviceId: string) => DeviceClass | null): Binding | null {
+  if (!isObj(raw)) return null;
+  const deviceId = raw.deviceId;
+  if (typeof deviceId !== 'string' || !BIND_ID_RE.test(deviceId)) return null;
+  const cls = clsOf(deviceId);
+  if (!cls || (deviceId === GIMBAL_DEVICE_ID) !== (cls === 'gimbal')) return null;
+  const intent = coerceIntent(raw.intent, cls);
+  return intent ? { deviceId, intent } : null;
+}
+
+/** The visual / form leaf whose component id is `id`, anywhere in the plan. */
+function leafById<T extends 'visual' | 'form'>(plan: SurfacePlan, type: T, id: string): Extract<TileSpec, { type: T }> | null {
+  let hit: Extract<TileSpec, { type: T }> | null = null;
+  const walk = (tiles: TileSpec[], path: number[]): void => {
+    tiles.forEach((t, i) => {
+      if (hit) return;
+      const p = [...path, i];
+      if (t.type === type) { if (tileComponentId(t, p) === id) hit = t as Extract<TileSpec, { type: T }>; return; }
+      if (t.type === 'row' || t.type === 'grid' || t.type === 'card') walk(t.children, p);
+      else if (t.type === 'tabs') t.tabs.forEach((tab, j) => walk(tab.children, [...p, j]));
+      else if (t.type === 'split') { walk(t.first, [...p, 0]); walk(t.second, [...p, 1]); }
+    });
+  };
+  walk(plan.tiles, []);
+  return hit;
+}
+
+/** The class a binding's device really is, from what the store holds. */
+const boundClass = (deviceId: string, cur: DeviceState | undefined): DeviceClass | undefined =>
+  (deviceId === GIMBAL_DEVICE_ID ? (cur ? 'gimbal' : undefined) : deviceClassOf(deviceId, cur));
+
+/** A visual tile's data-action press: the key is looked up in the APPROVED
+ *  plan's actions, then resolved like a tile press. Null when the key is not
+ *  bound there (the caller only speaks its label). */
+export function visualPress(plan: SurfacePlan | undefined, visualId: unknown, key: unknown, get: (id: string) => DeviceState | undefined):
+  (BindingResult & { deviceId: string }) | null {
+  if (!plan || typeof visualId !== 'string' || typeof key !== 'string') return null;
+  const leaf = leafById(plan, 'visual', visualId);
+  const b = leaf?.actions && Object.prototype.hasOwnProperty.call(leaf.actions, key) ? leaf.actions[key] : undefined;
+  if (!b) return null;
+  const cur = get(b.deviceId);
+  const cls = boundClass(b.deviceId, cur);
+  if (!cls) return { refusal: b.deviceId === GIMBAL_DEVICE_ID ? GIMBAL_NO_PHONE_REFUSAL : NOT_CONNECTED_REFUSAL, deviceId: b.deviceId };
+  return { ...bindingIntent(cls, b.deviceId, b.intent, cur), deviceId: b.deviceId };
+}
+
+/** A form submit: one intent per bound field, all checked before any is
+ *  sent — one refusal sends none. Null when the form binds no device (the
+ *  caller only speaks). Values come from the submit; a field she did not
+ *  touch has its approved value. */
+export function formIntents(plan: SurfacePlan | undefined, formId: unknown, values: unknown, get: (id: string) => DeviceState | undefined):
+  { intents: DeviceIntent[] } | { refusal: string; deviceId?: string } | null {
+  if (!plan || typeof formId !== 'string') return null;
+  const leaf = leafById(plan, 'form', formId);
+  if (!leaf) return null;
+  const bound = leaf.fields.filter((f): f is Extract<typeof f, { bind?: unknown }> & { bind: { deviceId: string; key: 'on' | SliderKey } } => f.kind !== 'choice' && !!f.bind);
+  if (!bound.length) return null;
+  const vals = isObj(values) ? values : {};
+  const intents: DeviceIntent[] = [];
+  // Checked in order against the state the earlier fields leave (power on,
+  // then a brightness): nothing is sent until every field has passed.
+  const after = new Map<string, DeviceState>();
+  for (const f of bound) {
+    const v = Object.prototype.hasOwnProperty.call(vals, f.id) ? vals[f.id] : f.value;
+    const { deviceId, key } = f.bind;
+    const cur = after.get(deviceId) ?? get(deviceId);
+    const cls = boundClass(deviceId, cur);
+    if (!cls) return { refusal: NOT_CONNECTED_REFUSAL, deviceId };
+    if (key === 'on' && typeof v !== 'boolean') return { refusal: NO_LEVEL_REFUSAL, deviceId };
+    const spec = (key === 'on' ? { on: v } : { [key]: '$value' }) as IntentSpec;
+    const r = bindingIntent(cls, deviceId, spec, cur, v);
+    if (!('intent' in r)) return { refusal: 'refusal' in r ? r.refusal : NOT_THIS_DEVICE_REFUSAL, deviceId };
+    intents.push(r.intent);
+    const { deviceId: _d, ...set } = r.intent;
+    after.set(deviceId, { ...cur!, ...(set as Partial<DeviceState>) });
+  }
+  return { intents };
+}
+
+/** Does the plan carry a visual action or a form field bound to a device? */
+export function planHasBindings(plan: SurfacePlan): boolean {
+  const walk = (tiles: TileSpec[]): boolean => tiles.some((t) => (t.type === 'visual' && !!t.actions && Object.keys(t.actions).length > 0)
+    || (t.type === 'form' && t.fields.some((f) => f.kind !== 'choice' && !!f.bind))
+    || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && walk(t.children))
+    || (t.type === 'tabs' && t.tabs.some((tab) => walk(tab.children)))
+    || (t.type === 'split' && (walk(t.first) || walk(t.second))));
+  return walk(plan.tiles);
+}
+
 /** The review's line on how lamp controls behave (said whenever a proposal has a lamp tile). */
 export const LIGHT_ON_RULES_LINE = 'A colour, a white or a scene turns the lamp on. Changing the brightness of a lamp that is off is refused: turn it on first.';
 
