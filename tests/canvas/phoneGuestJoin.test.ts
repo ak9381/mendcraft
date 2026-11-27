@@ -8,7 +8,6 @@ import { createFakeTransport } from '../../src/relay/transport';
 import { createHostSession } from '../../src/relay/session';
 import { loadPhonePair, type StorageLike } from '../../src/relay/pairingStore';
 import type { PairState } from '../../src/relay/protocol';
-import { shortCodeOf } from '../../src/relay/protocol';
 
 function memoryStorage(): StorageLike {
   const m = new Map<string, string>();
@@ -54,7 +53,7 @@ describe('joinPhoneAsGuest', () => {
     expect(saved?.platform).toBe('android');
     expect(saved?.token).toHaveLength(24);
     // The remembered token is the full capability, not just the 8-char code.
-    expect(saved?.token).not.toBe(shortCodeOf(host.token));
+    expect(saved?.token).not.toBe(host.rawCode);
 
     await guest.stop();
     await host.stop();

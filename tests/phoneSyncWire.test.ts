@@ -40,7 +40,7 @@ describe('session: resume the same room token', () => {
     const t = createFakeTransport();
     const host = await createHostSession(t, undefined, { token: TOKEN });
     expect(host.token).toBe(TOKEN);
-    expect(host.code).toBe(TOKEN.slice(0, 8));
+    expect(host.code).not.toBe(TOKEN.slice(0, 8)); // the code is its own secret
     await host.close();
   });
   it('ignores a malformed resume token and mints a fresh one', async () => {

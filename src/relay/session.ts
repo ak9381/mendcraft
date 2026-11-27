@@ -20,7 +20,7 @@ import {
   type GimbalModeKind,
   type GimbalCueKind,
   generateRoomToken,
-  shortCodeOf,
+  generatePairCode,
   type MusicStatus,
   type PairState,
   type RandomBytes,
@@ -50,6 +50,8 @@ interface SessionBase {
 
 export interface HostSession extends SessionBase {
   readonly token: string;
+  /** The short code of the CURRENT admission window: its own random secret
+   *  (never derived from the token), new each time a window opens. */
   readonly code: string;
   onCommand(cb: (cmd: RelayCommand) => void): void;
   onFrame(cb: (frame: RelayFrame) => void): void;
@@ -283,7 +285,9 @@ export async function createHostSession(
   const token = opts.token && RESUME_TOKEN_RE.test(opts.token)
     ? opts.token
     : generateRoomToken(random);
-  const code = shortCodeOf(token);
+  // The short code is a separate secret (crypto random, whatever `random` is):
+  // the token can't be worked out from it, and it changes with each window.
+  let code = generatePairCode();
   const core = makeCore('host', transport, token);
   const sid = Array.from(random(6), (b) => (b % 36).toString(36)).join('') + Date.now().toString(36);
   const now = opts.now ?? (() => Date.now());
@@ -313,6 +317,12 @@ export async function createHostSession(
     aliasCleared = true;
     admitting = false;
     await transport.clearAlias(code).catch(() => undefined);
+  }
+  /** Open a window: a code that is still open is kept (the card shows it); a
+   *  retired one is replaced by a new code — an old code never comes back. */
+  function openWindow(): void {
+    if (aliasCleared) code = generatePairCode();
+    aliasCleared = false;
   }
   let aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
@@ -419,7 +429,7 @@ export async function createHostSession(
 
   return {
     token,
-    code,
+    get code() { return code; },
     sid,
     setAttention: (get) => { attentionGet = get; },
     sendAttention: (who) => {
@@ -485,8 +495,8 @@ export async function createHostSession(
     admitMore: async () => {
       if (core.isClosed()) return;
       clearTimeout(aliasTimer);
+      openWindow();
       admitting = true;
-      aliasCleared = false;
       aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
       await transport.setAlias(code, token);
       // A fresh host message vouches for the reopened code (resolveRoomId

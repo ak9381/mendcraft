@@ -13,7 +13,7 @@ import {
   normalizeCode,
   pairStateLabel,
   parseJoinInput,
-  shortCodeOf,
+  generatePairCode,
   validateCommand,
   validateMessage,
   validateMusic,
@@ -45,10 +45,11 @@ describe('relay tokens, codes, and URLs', () => {
     expect(generateRoomToken(seqRandom(7))).not.toBe(generateRoomToken(seqRandom()));
   });
 
-  it('derives and groups the short code', () => {
-    const token = generateRoomToken(seqRandom());
-    const code = shortCodeOf(token);
-    expect(code).toBe(token.slice(0, CODE_LENGTH));
+  it('makes a short code of its own (never derived from a token) and groups it', () => {
+    const code = generatePairCode(seqRandom(3));
+    expect(code).toHaveLength(CODE_LENGTH);
+    expect([...code].every((c) => TOKEN_ALPHABET.includes(c))).toBe(true);
+    expect(generatePairCode()).not.toBe(generatePairCode());
     expect(groupCode(code)).toBe(`${code.slice(0, 4)}-${code.slice(4)}`);
   });
 
@@ -282,12 +283,46 @@ describe('host session short-code alias TTL', () => {
   });
 });
 
+describe('C2: the pairing code is a short-lived secret of its own', () => {
+  it('is not the token prefix, and a resumed room gets a new code every time', async () => {
+    const t = createFakeTransport();
+    const token = generateRoomToken(seqRandom());
+    const a = await createHostSession(t, seqRandom(), { token });
+    expect(a.code).not.toBe(token.slice(0, CODE_LENGTH));
+    await a.close();
+    const b = await createHostSession(t, seqRandom(), { token });
+    expect(b.token).toBe(token);
+    expect(b.code).not.toBe(a.code);
+    expect(await t.resolveAlias(a.code)).toBeNull(); // the old code is gone
+    expect(await t.resolveAlias(b.code)).toBe(token);
+    await b.close();
+    expect(await t.resolveAlias(b.code)).toBeNull();
+  });
+
+  it('re-opening admission after the code was retired mints a NEW code; the old one stays dead', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const first = host.code;
+    await host.endAdmission();
+    expect(await t.resolveAlias(first)).toBeNull();
+    await host.admitMore();
+    expect(host.code).not.toBe(first);
+    expect(await t.resolveAlias(first)).toBeNull();
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    // Re-opening while the code is still open keeps it (the card already shows it).
+    const open = host.code;
+    await host.admitMore();
+    expect(host.code).toBe(open);
+    await host.close();
+  });
+});
+
 describe('host + guest sessions over the fake transport', () => {
   it('pairs, exchanges commands and frames, and parts', async () => {
     const t = createFakeTransport();
     const host = await createHostSession(t, seqRandom());
     expect(host.state()).toBe('waiting');
-    expect(host.code).toBe(shortCodeOf(host.token));
+    expect(host.code).not.toBe(host.token.slice(0, CODE_LENGTH)); // its own secret
     expect(await t.resolveAlias(host.code)).toBe(host.token);
 
     const hostStates: PairState[] = [];

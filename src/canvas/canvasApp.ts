@@ -39,7 +39,7 @@ import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark
 import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
-import { loadHostToken, saveHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
+import { clearHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import type { GimbalCueKind, GimbalModeKind } from '../relay/protocol';
@@ -3942,10 +3942,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     open.sheet.setStatus('Opening a Relay room…');
     let pairing: PairingView | null = null;
+    // A new pairing opens a NEW room (C2): whoever heard an earlier code, and
+    // so learned that room's token, has nothing once this one starts. Phones
+    // paired in the open room keep it (the branch above re-opens a window on
+    // the same session); a phone paired in an earlier room hears the new chime.
+    clearHostToken(storage);
     const res = await startPhoneJoin({
-      // Resume the SAME room token across reloads so remembered phones stay
-      // paired (minting a fresh token every time would strand them).
-      token: loadHostToken(storage) ?? undefined,
       onState: (st) => {
         if (st === 'paired') {
           // A hello proves little (the room replays old ones on a reload):
@@ -4009,7 +4011,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // not retire the code the next phone is about to hear.
     if (pairFirst.phase() === 'pairing') { admissionOpen = true; void res.session.admitMore().catch(() => undefined); }
     showArrangeStrip(); // a phone is here: Swap sides becomes available
-    saveHostToken(storage, res.token); // persist so the next reload resumes it
     // Publish the current arrangement + focused board so a joining phone (or a
     // remembered one that just reconnected) populates its side immediately.
     republishCurrentBoard();
@@ -4024,7 +4025,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     floatHost.hidden = false;
     pairing = livePairing = showPairing(floatHost, {
       code: res.code,
-      note: 'After the first pair the phone is remembered and rejoins when you pick it up and look at it, or just open the app. Its changes still arrive here as proposals you keep or drop.',
+      note: 'After the first pair the phone is remembered while this room is open: it rejoins when you pick it up and look at it, or just open the app. Each new pairing opens a new room, so a phone paired before listens for this chime again. Its changes still arrive here as proposals you keep or drop.',
       // A phone already joined: X only ends pairing (the card has just said
       // it is connected). Nobody joined: X gives up the relay as before.
       // Disconnecting phones is the Disconnect chip's job alone.
