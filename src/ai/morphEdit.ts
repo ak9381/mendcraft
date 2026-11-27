@@ -9,7 +9,7 @@
 
 import { extractJson } from './cloudJson';
 import { fillVisible } from '../privacy/directory';
-import { redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
+import { redactDeviceIds, restoreDeviceIdFields, type DeviceIdSession } from '../privacy/deviceRedact';
 import { TILE_SCHEMA_LINE } from '../canvas/aiTurn';
 import { coerceTileSpec, type Coerced, type SurfacePlan, type TileSpec } from '../canvas/surfacePlan';
 
@@ -86,12 +86,12 @@ export function coerceMorphTile(raw: unknown, original: TileSpec): Coerced<TileS
 export function parseMorphTile(text: string, original: TileSpec, session?: DeviceIdSession): Coerced<TileSpec> {
   const raw = extractJson(text);
   if (raw == null) return { ok: false, error: 'The reply was not a tile.' };
-  let parsed: unknown = raw;
-  const stringified = JSON.stringify(raw);
-  const restored = session ? restoreDeviceIds(stringified, session) : stringified;
-  const filled = fillVisible(restored);
+  const withIds = session ? restoreDeviceIdFields(raw, session) : raw;
+  let parsed: unknown = withIds;
+  const stringified = JSON.stringify(withIds);
+  const filled = fillVisible(stringified);
   if (filled.text !== stringified) {
-    try { parsed = JSON.parse(filled.text); } catch { parsed = raw; }
+    try { parsed = JSON.parse(filled.text); } catch { parsed = withIds; }
   }
   return coerceMorphTile(parsed, original);
 }

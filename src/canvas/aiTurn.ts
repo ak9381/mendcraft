@@ -4,7 +4,7 @@
 // change goes on a history she can undo.
 import { extractJson } from '../ai/cloudJson';
 import { fillVisible } from '../privacy/directory';
-import { boardDeviceIds, redactDeviceIds, restoreDeviceIds, type DeviceIdSession } from '../privacy/deviceRedact';
+import { boardDeviceIds, redactDeviceIds, restoreDeviceIdFields, type DeviceIdSession } from '../privacy/deviceRedact';
 import { coerceSurfacePlan, MAX_DEPTH, MAX_NODES, MAX_TILES, PLAN_TEMPLATES, type SurfacePlan, type TileSpec } from './surfacePlan';
 import type { LanguagePack } from './languagePack';
 import { OFFLINE_MID_LINE } from './failLines';
@@ -277,14 +277,14 @@ export function parseModelPlan(text: string, deviceIdSession?: DeviceIdSession):
   const raw = extractJson(text);
   if (raw == null) return { ok: false, error: 'The reply was not a board plan.' };
   const normalized = normalizePlanRaw(raw);
-  const stringified = JSON.stringify(normalized);
   // Reverse order from the send side: real device ids back first (a "Device
-  // N" placeholder in a lamp/music/switch tile's deviceId), then real names.
-  const restored = deviceIdSession ? restoreDeviceIds(stringified, deviceIdSession) : stringified;
-  const filled = fillVisible(restored);
-  let parsed: unknown = normalized;
+  // N" placeholder in a deviceId field only), then real names.
+  const withIds = deviceIdSession ? restoreDeviceIdFields(normalized, deviceIdSession) : normalized;
+  const stringified = JSON.stringify(withIds);
+  const filled = fillVisible(stringified);
+  let parsed: unknown = withIds;
   if (filled.text !== stringified) {
-    try { parsed = JSON.parse(filled.text); } catch { parsed = normalized; }
+    try { parsed = JSON.parse(filled.text); } catch { parsed = withIds; }
   }
   const plan = coerceSurfacePlan(parsed);
   if (!plan.ok) return { ok: false, error: plan.error };

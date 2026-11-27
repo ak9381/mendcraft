@@ -229,6 +229,22 @@ describe('redaction covers nested surface plans', () => {
     expect(buildSurfacePrompt({ utterance: 'x', frameTitle: 'D', devices: [], current: { kind: 'room', title: 'H', tiles: [{ type: 'lamp', deviceId: 'wiz-a8bb50e1f2c3', label: 'L' }] } }, 'nano', { deviceIdSession: session }).prompt).toContain('wiz-a8bb50e1f2c3');
   });
 
+  it('only a deviceId field is restored: a title or label that says "Device 1" keeps its words (final review M7)', async () => {
+    const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
+    const session = createDeviceIdSession();
+    session.tokenFor('lamp-a');
+    const reply = '{"kind":"room","title":"Device 1 corner","tiles":[{"type":"lamp","deviceId":"Device 1","label":"Device 1"},{"type":"form","title":"Quick","fields":[{"kind":"toggle","id":"t","label":"On","bind":{"deviceId":"Device 1","key":"on"}}]}]}';
+    const parsed = parseModelPlan(reply, session);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.title).toBe('Device 1 corner');
+    const lamp = parsed.value.tiles[0];
+    if (lamp.type !== 'lamp') throw new Error('expected lamp');
+    expect(lamp.deviceId).toBe('lamp-a');
+    expect(lamp.label).toBe('Device 1');
+    expect(JSON.stringify(parsed.value.tiles[1])).toContain('"deviceId":"lamp-a"');
+  });
+
   it('round-trips a nested plan with a redacted device id back to the real id', async () => {
     const { createDeviceIdSession } = await import('../../src/privacy/deviceRedact');
     const session = createDeviceIdSession();
