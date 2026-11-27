@@ -163,9 +163,21 @@ async function holdAtEdge(side) {
   if (!t) return { error: 'no on-screen board title' };
   const frame = t.closest('.mc-frame');
   const start = frame.getBoundingClientRect().left;
-  let glowed = false;
-  const mo = new MutationObserver(() => { if (vp.classList.contains(`mc-edge-glow-${side}`)) glowed = true; });
-  mo.observe(vp, { attributes: true, attributeFilter: ['class'] });
+  let glowed = false, edgeLine = false, flashed = false, maxGlow = 0;
+  let pill = '';
+  // The BOARD lights up (mc-frame-sending, intensity --mc-send-glow) with a
+  // "Hold to send to …" pill; the thin edge line is secondary.
+  const mo = new MutationObserver(() => {
+    if (vp.classList.contains(`mc-edge-glow-${side}`)) edgeLine = true;
+    if (frame.classList.contains('mc-frame-sending')) {
+      glowed = true;
+      maxGlow = Math.max(maxGlow, Number(frame.style.getPropertyValue('--mc-send-glow')) || 0);
+      const p = frame.querySelector('.mc-frame-pill[data-pill="send"]:not([hidden])');
+      if (p) pill = p.textContent;
+    }
+    if (frame.classList.contains('mc-frame-sent')) flashed = true;
+  });
+  mo.observe(vp, { attributes: true, attributeFilter: ['class', 'style'], subtree: true });
   const st = document.querySelector('.mc-canvas-status');
   const lines = [];
   const so = new MutationObserver(() => lines.push(st.textContent));
@@ -181,7 +193,7 @@ async function holdAtEdge(side) {
   await sleep(300);
   mo.disconnect(); so.disconnect();
   const sent = lines.filter((l) => /^Sent /.test(l));
-  return { glowed, sent, back: Math.abs(frame.getBoundingClientRect().left - start) < 2 };
+  return { glowed, edgeLine, flashed, maxGlow, pill, stillLit: frame.classList.contains('mc-frame-sending'), sent, back: Math.abs(frame.getBoundingClientRect().left - start) < 2 };
 }
 
 /** A board held at EACH paired edge glows and is sent to that side's phone,
@@ -218,7 +230,9 @@ async function edgeSends(browser) {
       const res = await page.evaluate(holdAtEdge, side);
       if (res.error) { check(false, `edge ${round} ${side}: ${res.error}`); continue; }
       const want = name[lay[side]];
-      check(res.glowed, `edge ${round}: held at the ${side} edge glows`);
+      check(res.glowed && res.maxGlow > 0.5, `edge ${round}: held at the ${side} edge the board itself lights up (glow ${res.maxGlow})`);
+      check(res.pill === `Hold to send to ${want}`, `edge ${round} ${side}: the board says “${res.pill}”`);
+      check(res.flashed && !res.stillLit, `edge ${round} ${side}: the board flashes on send, then the glow clears`);
       check(res.sent.length === 1 && res.sent[0].includes(want), `edge ${round}: held at the ${side} edge sends to the ${want} (${res.sent.join(' / ') || 'nothing sent'})`);
       check(res.back, `edge ${round} ${side}: the board snaps back after the send`);
     }

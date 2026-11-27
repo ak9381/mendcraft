@@ -39,7 +39,7 @@ function fakeApp(effects: Record<string, Effect>, o: { pointRoute?: boolean; sen
     statusSince: (m) => log.slice(m),
     isOnline: () => online,
     toggleOffline() { online = !online; say(online ? 'Back online.' : 'Offline.'); },
-    async sendBoard() { if (o.sendOk === false) return false; say('Sent to iPhone (SIM).'); return true; },
+    async sendBoard() { if (o.sendOk === false) return false; say('Sent to the iPhone (SIM).'); return true; },
   };
   const pendingTimers: { at: number; fn: () => void }[] = [];
   function setTimeoutLike(fn: () => void, ms: number) { pendingTimers.push({ at: clock + ms, fn }); }

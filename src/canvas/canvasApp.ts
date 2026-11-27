@@ -35,6 +35,7 @@ import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
+import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
 import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
@@ -641,15 +642,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // is kept for the e2e (window.__mcLastBoardSnapshot, JSON as on the wire).
   const simWire = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') && typeof window !== 'undefined';
 
-  function setEdgeGlow(side: 'left' | 'right' | null, glow: number): void {
+  /** The board being lit for a send right now (boardGlow.ts). */
+  let sendingFrame: string | null = null;
+  function setEdgeGlow(side: 'left' | 'right' | null, glow: number, g: { frameId?: string; target?: PhonePlatform } = {}): void {
     viewport.classList.toggle('mc-edge-glow-left', side === 'left' && glow > 0.05);
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
+    // The dragged board ITSELF lights up near a paired phone's edge.
+    const view = sendGlowView(glow, g.target);
+    const next = view.on && g.frameId ? g.frameId : null;
+    if (sendingFrame && sendingFrame !== next) {
+      const old = world.querySelector<HTMLElement>(`[data-frame="${sendingFrame}"]`);
+      if (old) applySendGlow(old as unknown as GlowFrame, sendGlowView(0, null));
+    }
+    sendingFrame = next;
+    if (next) {
+      const el = world.querySelector<HTMLElement>(`[data-frame="${next}"]`);
+      if (el) applySendGlow(el as unknown as GlowFrame, view);
+    }
     // The phones strip shows which phone sits on that side while a board nears an edge.
     const near = !!side && glow > 0.05;
     if (near !== edgeNear) { edgeNear = near; showArrangeStrip(); }
   }
 
-  function publishBoardTransfer(frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform): void {
+  function publishBoardTransfer(frameId: string, board: SurfacePlan | null, t: TileTransfer | null, boardFor?: PhonePlatform, boardSend?: BoardSendMark): void {
     if (!hostSession && !simWire) return;
     try {
       // The board's CURRENT drawing rides beside it (never inside the surface
@@ -660,6 +675,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         layout: screenLayout,
         ...(board ? { board } : {}),
         ...(board && boardFor ? { boardFor } : {}),
+        ...(board && boardSend ? { boardSend } : {}),
         ...(boardDrawings && Object.keys(boardDrawings).length ? { boardDrawings } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
@@ -823,16 +839,18 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     getRect: (id) => { const f = reg.get(id); return f ? { ...f.rect } : null; },
     restoreRect: (id, rect) => { reg.setRect(id, rect); sync(); persist(); },
     getBoard: (id) => surfaces[id] ?? null,
-    onGlow: (g) => setEdgeGlow(g.side, g.glow),
+    onGlow: (g) => setEdgeGlow(g.side, g.glow, g),
     onCommit: (s) => {
-      if (hostSession) {
+      // A real send is stamped (republishes are not), so the phone lights
+      // the arrived board once — never on a replay or a reload.
+      const stamp: BoardSendMark = { id: `${Date.now().toString(36)}-${(boardSends + 1).toString(36)}`, at: Date.now() };
+      if (hostSession || simWire) {
         // Only the phone on that side shows it (boardFor); the other ignores it.
         sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
-        publishBoardTransfer(s.frameId, s.board, null, s.target);
-      } else if (simWire) {
-        sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
-        publishBoardTransfer(s.frameId, s.board, null, s.target);
+        publishBoardTransfer(s.frameId, s.board, null, s.target, stamp);
       }
+      const sentEl = world.querySelector<HTMLElement>(`[data-frame="${s.frameId}"]`);
+      if (sentEl) flashSent(sentEl as unknown as GlowFrame);
       boardSends++;
       say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
     },
@@ -5343,7 +5361,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId === id) focusId = null;
     if (lastFocus === id) lastFocus = null;
   }
-  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number } = {}): void {
+  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; arrived?: boolean } = {}): void {
     // Each board once: a board that arrives again (replay on re-pair, a
     // republish) goes to the frame already showing it; other copies go.
     const preferred = [focusId, lastFocus].find((x): x is string => !!x && !!reg.get(x)) ?? reg.list()[0]?.id ?? null;
@@ -5388,6 +5406,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (phoneShell) {
       applyEditLock();
       fitPhone();
+    }
+    // A real send from the laptop (not a replay): the board lights up green
+    // with "Moved from laptop" for a few seconds.
+    if (info.arrived) {
+      const el = world.querySelector<HTMLElement>(`[data-frame="${id}"]`);
+      if (el) flagArrived(el as unknown as GlowFrame);
     }
   }
 
