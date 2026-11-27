@@ -247,8 +247,13 @@ export function diffPlans(before: SurfacePlan | null, after: SurfacePlan, ctx: P
 }
 
 /** The Kannada (or any language) pack proposal, as one plan line. */
-export function languagePackChanges(language: string, labelCount: number): PlanChange[] {
-  return [{ op: 'change', label: `Switch the interface to ${language} (${plural(labelCount, 'label')})` }];
+export function languagePackChanges(language: string, labelCount: number, phrases?: Readonly<Record<string, readonly string[] | undefined>>): PlanChange[] {
+  const out: PlanChange[] = [{ op: 'change', label: `Switch the interface to ${language} (${plural(labelCount, 'label')})` }];
+  // Every spoken phrase the pack adds is listed, so she sees what each will do.
+  for (const [intent, list] of Object.entries(phrases ?? {})) {
+    if (list?.length) out.push({ op: 'add', label: `Spoken ${intent}: ${list.map((p) => `“${p}”`).join(', ')}` });
+  }
+  return out;
 }
 
 /** One tile swapped in place (self-check fix / morph): a whole-plan diff

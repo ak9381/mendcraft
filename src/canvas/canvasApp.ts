@@ -3698,7 +3698,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     });
     showReview({
       title: 'Add Kannada', card, extra: buildReviewExtra(),
-      changes: languagePackChanges('Kannada', swapCount),
+      changes: languagePackChanges('Kannada', swapCount, Object.fromEntries(Object.entries(next.phrases).map(([k, v]) => [INTENT_ENGLISH[k as IntentKey] ?? k, v]))),
       facts: reviewFacts(knSent, utterance),
     }, { tokens: [knSent], facts: () => reviewFacts(knSent, utterance) });
   }
