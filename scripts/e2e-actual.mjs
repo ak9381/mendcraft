@@ -674,6 +674,143 @@ async function floorplan(page) {
 }
 SECTIONS.floorplan = floorplan;
 
+// ---- phonelayout: a floor plan sent to a phone carries its current drawing, fits the phone, shows once ----
+/** In the page: the plan board, its tools and its drawn labels (from sim-main e2e-phone-layout). */
+function measurePlan() {
+  const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+  const shown = (el) => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0;
+  const host = document.querySelector('mc-plan-board .mc-plan-board');
+  const vp = document.querySelector('.mc-viewport');
+  const walls = host ? [...host.querySelectorAll('svg polygon')].map(box).filter((b) => b.width > 0 || b.height > 0) : [];
+  const drawing = walls.length ? { left: Math.min(...walls.map((b) => b.left)), right: Math.max(...walls.map((b) => b.right)), top: Math.min(...walls.map((b) => b.top)), bottom: Math.max(...walls.map((b) => b.bottom)) } : null;
+  const labels = host ? [...host.querySelectorAll('svg text')].filter((t) => t.textContent && getComputedStyle(t).display !== 'none').map((t) => ({ text: t.textContent, box: box(t) })) : [];
+  // Room names and areas must never run into each other. A dimension label
+  // ("3.00 m") the generator puts on a shared wall can sit over a room name
+  // on the laptop too — listed (dimOverlaps), not failed here.
+  const isDim = (t) => /\d m$/.test(t);
+  const overlaps = [];
+  const dimOverlaps = [];
+  for (let a = 0; a < labels.length; a++) for (let b = a + 1; b < labels.length; b++) {
+    const A = labels[a].box, B = labels[b].box;
+    if (!(Math.min(A.right, B.right) - Math.max(A.left, B.left) > 1 && Math.min(A.bottom, B.bottom) - Math.max(A.top, B.top) > 1)) continue;
+    (isDim(labels[a].text) || isDim(labels[b].text) ? dimOverlaps : overlaps).push(`${labels[a].text} × ${labels[b].text}`);
+  }
+  const toggle = document.querySelector('.mc-plan-tools-toggle');
+  return {
+    dimOverlaps,
+    host: host ? box(host) : null, viewport: vp ? box(vp) : null, drawing,
+    palette: shown(host?.querySelector('.mc-palette')), trash: shown(host?.querySelector('.mc-trash')), status: shown(host?.querySelector('.mc-status')),
+    toggle: shown(toggle), expanded: toggle?.getAttribute('aria-expanded'),
+    labels: labels.map((l) => l.text), overlaps,
+    rooms: (host?.__mcPlanDoc?.()?.rooms ?? []).map((r) => r.name),
+    planBoards: document.querySelectorAll('mc-plan-board').length,
+    frames: document.querySelectorAll('.mc-frame').length,
+  };
+}
+
+async function phonePlanChecks(p, vp) {
+  const m = await p.evaluate(measurePlan);
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, `plan-${vp}.png`) });
+  check(m.rooms.includes('Study') && m.labels.includes('Study'), `${vp}: the phone shows the plan as edited, with the study (${m.rooms.join(', ')})`);
+  check(!m.palette && !m.trash && !m.status, `${vp}: drawing tools tucked away by default`);
+  check(m.toggle && m.expanded === 'false', `${vp}: a "Tools" toggle is shown`);
+  check(!!m.host && !!m.viewport && m.host.bottom <= m.viewport.bottom + 1 && m.host.left >= 0 && m.host.right <= m.viewport.right + 1, `${vp}: the plan area fits the board area (${Math.round(m.host?.bottom ?? -1)} ≤ ${Math.round(m.viewport?.bottom ?? -1)})`);
+  check(!!m.host && m.host.height >= 0.45 * m.viewport.height, `${vp}: the plan area uses the screen (${Math.round(m.host?.height ?? 0)} px of ${Math.round(m.viewport?.height ?? 0)})`);
+  const d = m.drawing;
+  check(!!d && d.left >= m.host.left - 1 && d.right <= m.host.right + 1 && d.top >= m.host.top - 1 && d.bottom <= m.host.bottom + 1, `${vp}: the whole plan is in view`);
+  check(m.overlaps.length === 0, `${vp}: no two room labels overlap${m.overlaps.length ? ` — ${m.overlaps.join('; ')}` : ''}`);
+  if (m.dimOverlaps.length) console.log(`     note: a dimension label overlaps a room label (${m.dimOverlaps.join('; ')})`);
+  await p.tap('.mc-plan-tools-toggle');
+  await sleep(400);
+  const t = await p.evaluate(measurePlan);
+  check(t.palette && t.expanded === 'true', `${vp}: "Tools" brings the palette back`);
+  check(t.overlaps.length === 0, `${vp}: labels stay clear with the tools open`);
+  await p.tap('.mc-plan-tools-toggle');
+  await sleep(300);
+  check(!(await p.evaluate(measurePlan)).palette, `${vp}: "Tools" again tucks them away`);
+}
+
+async function phonelayout(page) {
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'two phones join'))) return;
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
+  await page.evaluate(() => { window.__mcCanvas.run('draw a two bedroom floor plan'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the floor-plan review opens'))) return;
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 10_000, 'the drawing is on the laptop'))) return;
+  await page.evaluate(() => { window.__mcCanvas.run('add a study next to bedroom 2'); });
+  if (!(await waitFor(page, reviewOpen, 15_000, 'the plan-edit review opens'))) return;
+  await page.evaluate(() => window.__mcCanvas.keep());
+  if (!(await waitFor(page, () => (document.querySelector('mc-plan-board .mc-plan-board')?.__mcPlanDoc?.().rooms ?? []).some((r) => r.name === 'Study'), 10_000, 'the study is drawn on the laptop'))) return;
+  const planFrame = await page.evaluate(() => window.__mcCanvas.frames().find((f) => f.kind === 'plan')?.id);
+  await page.evaluate((id) => window.__mcCanvas.focus(id), planFrame);
+
+  const docRooms = (s) => Object.values(s?.boardDrawings ?? {}).flatMap((d) => (d.rooms ?? []).map((r) => r.name));
+  check(await page.evaluate(() => window.__mcCanvas.sendBoard('ios')), 'the Floor plan board is sent to the iPhone edge');
+  const snap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
+  check(snap?.boardFor === 'ios' && docRooms(snap).includes('Study'), `the snapshot targets the iPhone and carries the edited drawing (got ${JSON.stringify({ to: snap?.boardFor, rooms: docRooms(snap) })})`);
+  check(!JSON.stringify(snap?.board ?? {}).includes('Study'), 'the surface plan itself stays drawing-free');
+  if (!snap) return;
+
+  const browser = page.browserContext().browser();
+  const mk = async (ios) => { const c = await browser.createBrowserContext(); const p = await c.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(String(e?.message || e))); return { c, p, errs, ok: await openPhone(p, ios) }; };
+  const iphone = await mk(true);
+  const android = await mk(false);
+  try {
+    if (!iphone.ok || !android.ok) return;
+    check(await iphone.p.evaluate((s) => window.__mcGuestSnapshot(s), snap), 'the iPhone (440×956) takes the board');
+    check(!(await android.p.evaluate((s) => window.__mcGuestSnapshot(s), snap)), 'the Nothing phone ignores a board sent to the iPhone');
+    if (!(await waitFor(iphone.p, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 15_000, 'the plan on the iPhone'))) return;
+    await sleep(1200);
+    await phonePlanChecks(iphone.p, 'iphone-440x956');
+    // The same board arriving again (a replay on re-pair) shows once.
+    check(await iphone.p.evaluate((s) => window.__mcGuestSnapshot({ ...s, rev: s.rev + 5 }), snap), "the iPhone takes the same board again (a replay on re-pair)");
+    await sleep(1200);
+    const once = await iphone.p.evaluate(measurePlan);
+    check(once.frames === 1 && once.planBoards === 1, `a replayed board shows once (${once.frames} board(s), ${once.planBoards} plan(s))`);
+    const mark = await iphone.p.evaluate(() => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1') ?? 'null')?.frames?.map((f) => f.from ?? null); } catch { return null; } });
+    check(JSON.stringify(mark) === '["laptop"]', `the phone saves the received mark with the board (got ${JSON.stringify(mark)})`);
+
+    check(await page.evaluate(() => window.__mcCanvas.sendBoard('android')), 'the Floor plan board is sent to the Nothing phone edge');
+    const snapA = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
+    check(snapA?.boardFor === 'android' && docRooms(snapA).includes('Study'), 'the snapshot targets the Nothing phone with the edited drawing');
+    check(await android.p.evaluate((s) => window.__mcGuestSnapshot(s), snapA), 'the Nothing phone (412×915) takes the board');
+    if (!(await waitFor(android.p, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 15_000, 'the plan on the Nothing phone'))) return;
+    await sleep(1200);
+    await phonePlanChecks(android.p, 'android-412x915');
+    check(iphone.errs.length === 0 && android.errs.length === 0, `no page errors on the phones${[...iphone.errs, ...android.errs].length ? `: ${[...iphone.errs, ...android.errs].slice(0, 3).join(' | ')}` : ''}`);
+  } finally {
+    await iphone.c.close();
+    await android.c.close();
+  }
+}
+SECTIONS.phonelayout = phonelayout;
+
+// ---- persist: ?fresh keeps a copy of the saved layout and leaves the address; an unreadable layout is kept safe ----
+async function persist(page) {
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check(await page.evaluate(() => !new URLSearchParams(location.search).has('fresh') && new URLSearchParams(location.search).get('sim') === '1'), '?fresh leaves the address bar (the rest stays)');
+  await page.evaluate(() => window.__mcCanvas.run('new board'));
+  await sleep(1200); // past the save debounce
+  const saved = await page.evaluate(() => localStorage.getItem('mc.canvas.v1'));
+  check(!!saved && JSON.parse(saved).frames.length === 1, 'the new board is in the saved layout');
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check((await frames(page)).length === 1, 'a reload without fresh opens what was built');
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check((await frames(page)).length === 0, 'a second ?fresh starts blank');
+  check(await page.evaluate((s) => localStorage.getItem('mc.canvas.v1.beforeFresh') === s, saved), 'the layout before it is kept under beforeFresh');
+  // A layout this build cannot read: copied aside, said once, never overwritten.
+  await page.evaluate(() => localStorage.setItem('mc.canvas.v1', '{"version":99,"frames":"broken"}'));
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, () => document.body.innerText.includes('Couldn’t open your saved boards — they’re kept safe.'), 5_000, 'the unreadable line is said')
+    .then((ok) => ok && check(true, 'the unreadable line is said'));
+  await page.evaluate(() => window.__mcCanvas.run('new board'));
+  await sleep(1200);
+  check(await page.evaluate(() => localStorage.getItem('mc.canvas.v1.unreadable') === '{"version":99,"frames":"broken"}'), 'the unreadable layout is kept under .unreadable after a save');
+}
+SECTIONS.persist = persist;
+
 async function main() {
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();
