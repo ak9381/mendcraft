@@ -47,39 +47,69 @@ export function lampIntentFromPilot(params: unknown): LampIntent | null {
   return int(sceneId, 1, 32) && isWizScene(sceneId) ? { kind: 'scene', sceneId } : null;
 }
 
-/** Send one planned request through a fixed transport. A transport failure
- *  (the bridge or the plugin not answering) is thrown, so the caller can mark
- *  the device unreachable; a request this file will not send is `ok: false`. */
-export async function runPlanned(req: PlannedRequest, deps: { wiz: WizClient; native?: LanPlugin }): Promise<RunPlannedResult> {
+/** One request, checked and ready to send (nothing has been sent yet). */
+export type CheckedRequest =
+  | { send: 'wiz-get'; host: string }
+  | { send: 'wiz-set'; host: string; intent: LampIntent }
+  | { send: 'udp'; host: string; port: number; payload: string }
+  | { send: 'http'; method: string; url: string; body?: string };
+
+/** A host on the Wi-Fi that one device can have: private IPv4, and not the
+ *  network (.0) or broadcast (.255) address of a /24. */
+const deviceHost = (host: string): boolean => {
+  if (!isPrivateIPv4(host)) return false;
+  const last = Number(host.split('.')[3]);
+  return last !== 0 && last !== 255;
+};
+
+/** Every check runPlanned makes, without sending anything: what would be
+ *  sent, or why it will not be. A press with several requests checks them
+ *  all first, so a refusal never comes after part of it was sent. */
+export function checkPlanned(req: PlannedRequest, o: { native: boolean }): { ok: true; checked: CheckedRequest } | { ok: false; why: string } {
   // planRequest checked these; a stale or hand-made request is checked again.
-  if (!isPrivateIPv4(req.host)) return { ok: false, why: NOT_LAN };
+  if (!deviceHost(req.host)) return { ok: false, why: NOT_LAN };
   if (req.transport === 'udp') {
     if (!ALLOWED_UDP_PORTS.includes(req.port)) return { ok: false, why: NEEDS_PHONE_APP };
     const payload = isObj(req.payload) ? req.payload : null;
     if (req.port === WIZ_PORT) {
       const method = payload?.method;
       // Only setting or reading the light: never "reboot", "reset", "registration".
-      if (method !== 'setPilot' && method !== 'getPilot') return { ok: false, why: deps.native ? LAMP_CANT_TAKE : NEEDS_PHONE_APP };
-      if (method === 'getPilot') {
-        if (!deps.native) return { ok: true, state: await deps.wiz.getPilot(req.host) };
-        const r = await deps.native.sendUdp({ host: req.host, port: WIZ_PORT, payload: encodeMessage(buildGetPilot()), waitMs: 1500 });
-        return { ok: true, state: r.reply ? safePilot(r.reply) : null };
-      }
+      if (method !== 'setPilot' && method !== 'getPilot') return { ok: false, why: o.native ? LAMP_CANT_TAKE : NEEDS_PHONE_APP };
+      if (method === 'getPilot') return { ok: true, checked: o.native ? { send: 'udp', host: req.host, port: WIZ_PORT, payload: encodeMessage(buildGetPilot()) } : { send: 'wiz-get', host: req.host } };
       const intent = lampIntentFromPilot(payload?.params);
       if (!intent) return { ok: false, why: LAMP_CANT_TAKE };
-      if (!deps.native) return { ok: true, state: await deps.wiz.setPilot(req.host, intent) };
       // The phone app sends the checked command, rebuilt from the intent (never the raw payload).
-      await deps.native.sendUdp({ host: req.host, port: WIZ_PORT, payload: encodeMessage(buildSetPilot(intent)), waitMs: 1500 });
-      return { ok: true };
+      return { ok: true, checked: o.native ? { send: 'udp', host: req.host, port: WIZ_PORT, payload: encodeMessage(buildSetPilot(intent)) } : { send: 'wiz-set', host: req.host, intent } };
     }
-    if (!deps.native) return { ok: false, why: NEEDS_PHONE_APP };
-    await deps.native.sendUdp({ host: req.host, port: req.port, payload: JSON.stringify(req.payload) });
-    return { ok: true };
+    if (!o.native) return { ok: false, why: NEEDS_PHONE_APP };
+    return { ok: true, checked: { send: 'udp', host: req.host, port: req.port, payload: JSON.stringify(req.payload) } };
   }
-  if (!deps.native) return { ok: false, why: NEEDS_PHONE_APP };
+  if (!o.native) return { ok: false, why: NEEDS_PHONE_APP };
   if (!ALLOWED_HTTP_PORTS.includes(req.port) || !['GET', 'POST', 'PUT'].includes(req.method)) return { ok: false, why: NEEDS_PHONE_APP };
   const base = `http://${req.host}${req.port === 80 ? '' : `:${req.port}`}/`;
   if (!req.url.startsWith(base)) return { ok: false, why: NOT_LAN };
-  const res = await deps.native.http({ method: req.method, url: req.url, ...(req.body !== undefined ? { body: JSON.stringify(req.body) } : {}) });
+  return { ok: true, checked: { send: 'http', method: req.method, url: req.url, ...(req.body !== undefined ? { body: JSON.stringify(req.body) } : {}) } };
+}
+
+/** Send one request that passed checkPlanned. A transport failure (the
+ *  bridge or the plugin not answering) is thrown. */
+export async function sendChecked(c: CheckedRequest, deps: { wiz: WizClient; native?: LanPlugin }): Promise<RunPlannedResult> {
+  if (c.send === 'wiz-get') return { ok: true, state: await deps.wiz.getPilot(c.host) };
+  if (c.send === 'wiz-set') return { ok: true, state: await deps.wiz.setPilot(c.host, c.intent) };
+  if (!deps.native) return { ok: false, why: NEEDS_PHONE_APP };
+  if (c.send === 'udp') {
+    const r = await deps.native.sendUdp({ host: c.host, port: c.port, payload: c.payload, waitMs: 1500 });
+    return { ok: true, ...(c.port === WIZ_PORT && c.payload.includes('"getPilot"') ? { state: r.reply ? safePilot(r.reply) : null } : {}) };
+  }
+  const res = await deps.native.http({ method: c.method, url: c.url, ...(c.body !== undefined ? { body: c.body } : {}) });
   return res.status >= 200 && res.status < 300 ? { ok: true } : { ok: false, why: `The device answered ${res.status}. Nothing changed.` };
+}
+
+/** Check one planned request, then send it through a fixed transport. A
+ *  transport failure is thrown, so the caller can mark the device
+ *  unreachable; a request this file will not send is `ok: false`. */
+export async function runPlanned(req: PlannedRequest, deps: { wiz: WizClient; native?: LanPlugin }): Promise<RunPlannedResult> {
+  const c = checkPlanned(req, { native: !!deps.native });
+  if (!c.ok) return c;
+  return sendChecked(c.checked, deps);
 }

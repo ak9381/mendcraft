@@ -564,8 +564,10 @@ async function connector(page) {
   const stored = await connectorArtifacts(page);
   check(stored.length === 1 && stored[0].by === 'replay' && stored[0].data.connector.source === 'cloud', `stored once, made by replay, source cloud (got ${JSON.stringify(stored.map((a) => [a.id, a.by]))})`);
   check(!JSON.stringify(stored).match(/192\.168\.|127\.0\.0\.1|38888|token/i), 'the stored connector holds no address and no token');
-  await waitFor(page, () => { const r = [...document.querySelectorAll('mc-device-tile')][0]?.shadowRoot; return !!r && !r.querySelector('[data-connector]'); }, 5_000, 'the tile footnote is gone')
-    .then((ok) => ok && check(true, 'after Approve the tile footnote is gone'));
+  await waitFor(page, () => { const n = [...document.querySelectorAll('mc-device-tile')][0]?.shadowRoot?.querySelector('[data-connector]'); return n?.getAttribute('data-connector') === 'generated'; }, 5_000, 'the built-in footnote is gone')
+    .then((ok) => ok && check(true, 'after Approve the "Built-in WiZ connector" footnote is gone'));
+  const made = await page.evaluate(lampTile);
+  check(made?.footnote === 'Connector by Replay · written example', `the tile names the connector's maker (got ${JSON.stringify(made?.footnote)})`);
 
   // A press runs through the approved connector's checks (a SIM lamp: then the simulated answer).
   await page.evaluate(() => document.querySelector('mc-device-tile').shadowRoot.querySelector('[data-act=toggle]').click());
@@ -575,7 +577,7 @@ async function connector(page) {
   // Back after a reload: the connector is checked again and the footnote stays gone.
   if (!(await open(page, 'sim=1&hands=0'))) return;
   if (!(await waitFor(page, () => !!document.querySelector('mc-device-tile'), 10_000, 'the lamp board is back'))) return;
-  check((await page.evaluate(lampTile))?.footnote === '', 'after a reload the lamp still runs on the generated connector');
+  check((await page.evaluate(lampTile))?.footnote === 'Connector by Replay · written example', 'after a reload the lamp still runs on the generated connector, and says who made it');
 
   // A tampered connector (a port outside the allow-list) is dropped at load: the lamp is back on the built-in one.
   const bad = JSON.parse(JSON.stringify(stored[0]));

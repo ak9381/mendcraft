@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { combineFacts, createReviewReceipts, clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
+import { coerceConnector } from '../../src/devices/connector';
+import { coerceIntentMap } from '../../src/devices/intentMap';
+import { combineFacts, connectorChanges, createReviewReceipts, clampReviewSize, engineChipText, honestyLines, loadReviewSize, mountReviewDialog, reviewActionFor, reviewWindowStart, saveReviewSize, REVIEW_WINDOW_WIDTH } from '../../src/canvas/reviewDialog';
 
 describe('reviewActionFor', () => {
   it('approve maps to keep', () => { expect(reviewActionFor('approve')).toBe('keep'); });
   it('reject maps to drop', () => { expect(reviewActionFor('reject')).toBe('drop'); });
   it('ask-else never keeps or drops', () => { expect(reviewActionFor('ask-else')).toBeNull(); });
 });
+
+/** Every non-empty innerHTML write (model text must never take that path). */
+const htmlWrites: string[] = [];
 
 /** Minimal hand-rolled fake DOM, in the same style the rest of this suite
  *  uses for DOM modules under Vitest's node environment (no jsdom). */
@@ -34,7 +39,7 @@ class FakeEl {
     remove: (c: string) => this.classList.toggle(c, false),
   };
   constructor(tag: string) { this.tag = tag; }
-  set innerHTML(_: string) { this.children = []; }
+  set innerHTML(v: string) { if (v) htmlWrites.push(v); this.children = []; }
   get innerHTML() { return ''; }
   append(...nodes: FakeEl[]) { this.children.push(...nodes); }
   remove() {}
@@ -359,5 +364,31 @@ describe('combineFacts: one review for a two-engine change', () => {
     const f = combineFacts({ ...gemini, sim: true, bytes: 0, simBytes: 2048 }, { ...nano, sim: true }, 'improved');
     expect(f.chain).toContain('improved by Gemini · SIM would send 2.0 KB');
     expect(honestyLines(f).left).toMatch(/^SIM · nothing left this device/);
+  });
+});
+
+describe('connector review', () => {
+  it('shows model-written labels and paths as text, never as markup', () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    const c = coerceConnector({
+      brand: 'WiZ', deviceKind: 'smart-bulb', discovery: { method: 'manual' },
+      actions: [
+        { id: 'on', label: evil, params: [], request: { transport: 'udp', port: 38899, payload: { method: evil, params: { state: true } } } },
+        { id: 'web', label: 'Web', params: [], request: { transport: 'http', port: 80, method: 'GET', path: '/on' } },
+      ],
+    }, 'cloud');
+    expect(c).not.toBeNull();
+    const changes = connectorChanges(c!, coerceIntentMap({ on: { action: 'on' } }, c!));
+    const root = new FakeEl('div') as unknown as HTMLElement;
+    const dialog = mountReviewDialog(root, {}, fakeDoc as unknown as Document);
+    htmlWrites.length = 0;
+    dialog.open({ title: 'Connect the lamp', card: fakeCard().card, changes });
+    const list = (root as unknown as FakeEl).querySelector('.mc-review-plan-list') as FakeEl;
+    const text = (el: FakeEl): string => el.textContent + el.children.map(text).join('');
+    const all = list.children.map(text).join(' ');
+    expect(all).toContain(`Action: ${evil}`);
+    expect(all).toContain('HTTP GET port 80 · /on');
+    expect(all).toContain(`runs “${evil}”`);
+    expect(htmlWrites).toEqual([]);
   });
 });

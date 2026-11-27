@@ -119,6 +119,18 @@ describe('a lamp on a generated connector', () => {
     expect(client.setPilot).not.toHaveBeenCalled();
   });
 
+  it('checks every request of a press before the first is sent: {on, temp 2100} sends nothing', async () => {
+    // A connector that declares a wider white range than the bulb takes:
+    // argsRefusal passes, the transport check refuses — before power-on goes out.
+    const wide = approved();
+    Object.assign(wide.connector.actions.find((a) => a.id === 'set-white')!.params[0], { min: 1000, max: 10000 });
+    const client = fakeClient();
+    const conn = createWizAwareConnector({ client, fallback: fallback(), status: { up: true }, bulbIp: () => '192.168.1.40', connectorFor: () => wide });
+    await expect(conn.run({ deviceId: 'wiz-lamp-1', on: true, temp: 2100 })).rejects.toThrow(/Nothing changed/);
+    expect(client.setPilot).not.toHaveBeenCalled();
+    expect(client.getPilot).not.toHaveBeenCalled();
+  });
+
   it('the simulated gate follows the same rules', async () => {
     const inner = fallback();
     const gate = createConnectorGate(inner, approved);

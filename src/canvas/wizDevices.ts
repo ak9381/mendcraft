@@ -9,7 +9,7 @@ import { BridgeRefusedError, type WizClient } from '../devices/wizClient';
 import type { LampIntent, LampState } from '../devices/wiz';
 import { planRequest, type Connector } from '../devices/connector';
 import { actionsForIntent, argsRefusal, type ActionCall, type IntentMap } from '../devices/intentMap';
-import { runPlanned } from '../devices/connectorTransport';
+import { checkPlanned, sendChecked } from '../devices/connectorTransport';
 import type { LanPlugin } from '../devices/native';
 
 export function isWizDevice(deviceId: string): boolean {
@@ -147,11 +147,17 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
     const ip = bulbIp(intent.deviceId);
     const plans = calls.map((call) => planRequest(c.connector, call.action, call.args, ip));
     for (const p of plans) if (!p.ok) throw new DeviceError(`${p.error} Nothing changed.`);
+    // Every request is checked before the first one is sent: a press is sent
+    // whole or refused whole, so "Nothing changed." is always true.
+    const checked = plans.map((p) => (p.ok ? checkPlanned(p.request, { native: !!deps.native }) : { ok: false as const, why: 'Nothing changed.' }));
+    for (const c of checked) if (!c.ok) throw new DeviceError(c.why);
     let state: LampState | null = null;
-    for (const p of plans) {
-      if (!p.ok) continue;
-      const r = await runPlanned(p.request, { wiz: deps.client, native: deps.native });
-      if (!r.ok) throw new DeviceError(r.why);
+    for (const [i, c] of checked.entries()) {
+      if (!c.ok) continue;
+      const r = await sendChecked(c.checked, { wiz: deps.client, native: deps.native });
+      // Only an HTTP device can answer "no" after a send: when earlier
+      // requests of this press already went out, the line says so.
+      if (!r.ok) throw new DeviceError(i === 0 ? r.why : `${r.why.replace(/\s*Nothing changed\.$/, '')} Part of this was already sent.`);
       if (r.state !== undefined) state = r.state;
     }
     return ack(state, intent);

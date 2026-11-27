@@ -131,7 +131,8 @@ export class DeviceTileElement extends A2uiLitElement<typeof DeviceTileApi> {
       ${controls.map((c, i) => this.control(c, i, s, p.onAct))}
       ${p.standard ? html`<p class="note" data-standard>${STANDARD_CONTROLS_NOTE}</p>` : nothing}
       ${p.connector === 'built-in' ? html`<p class="note" data-connector="built-in">${BUILTIN_CONNECTOR_NOTE}</p>`
-        : p.connector === 'none' ? html`<p class="note" data-connector="none">${NO_CONNECTOR_NOTE}</p>` : nothing}
+        : p.connector === 'none' ? html`<p class="note" data-connector="none">${NO_CONNECTOR_NOTE}</p>`
+        : p.connector === 'generated' && p.connectorBy ? html`<p class="note" data-connector="generated">${p.connectorBy}</p>` : nothing}
     </div>`;
   }
   private control(c: ControlSpec, i: number, s: TileState, act: unknown) {

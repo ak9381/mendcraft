@@ -47,6 +47,14 @@ describe('runPlanned', () => {
     expect(native.http).not.toHaveBeenCalled();
   });
 
+  it('refuses a network or broadcast address (last octet 0 or 255)', async () => {
+    const wiz = fakeWiz();
+    for (const host of ['192.168.1.0', '192.168.1.255', '10.0.0.255']) {
+      expect((await runPlanned({ ...udp(38899, { method: 'setPilot', params: { state: true } }), host }, { wiz })).ok).toBe(false);
+    }
+    expect(wiz.setPilot).not.toHaveBeenCalled();
+  });
+
   it('refuses setPilot params the bridge would not take, never clamping them', async () => {
     const wiz = fakeWiz();
     for (const params of [{ dimming: 500 }, { dimming: 5 }, { state: false, dimming: 50 }, { dimming: 50, temp: 3000 }, { reboot: true }, { r: 10 }]) {

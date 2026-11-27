@@ -1455,8 +1455,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     for (const [id, d] of Object.entries(store.all())) {
       if (!isWizDevice(id) || (d.cls && d.cls !== 'lamp')) continue;
       const want = connectorState(lampConnectorFor(id));
-      if (d.connector !== want) store.patch(id, { connector: want });
+      const by = want === 'generated' ? connectorMakerLine(connectorArtifacts.get(lampConnectorKey())?.by) : '';
+      if (d.connector !== want || (d.connectorBy ?? '') !== by) store.patch(id, { connector: want, connectorBy: by });
     }
+  }
+  /** "Connector by Gemini"; a test build's replayed one says which kind of reply it was. */
+  function connectorMakerLine(by: ArtifactBy | undefined): string {
+    if (!by) return '';
+    if (by === 'replay') return `Connector by ${replayRouteIn(opts.engines?.gemini?.('connector')?.routeLine) ?? 'Replay'}`;
+    return `Connector by ${by === 'person' ? 'you' : engineName(by)}`;
   }
   syncConnectorLabels();
   /** The bridge stopped answering: mark every WiZ lamp so (live: "Not
