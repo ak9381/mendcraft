@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { codeVouchTag, codeVouchedAt, generateRoomToken, type RelayMessage } from '../src/relay/protocol';
 import { createFakeTransport, type RelayTransport } from '../src/relay/transport';
 import { ALIAS_TTL_MS, createHostSession, resolveRoomId } from '../src/relay/session';
-import { loadOpenCode, openCodeStore } from '../src/relay/pairingStore';
+import { loadOpenCode, loadStaleCodes, openCodeStore } from '../src/relay/pairingStore';
 
 /** The fake transport with the Firestore freshness rule: the alias doc holds
  *  only {room}; freshness is read from the room's host messages (server time
@@ -76,6 +76,27 @@ describe('C2: a code left behind by a reload never comes back in the resumed roo
     expect(await resolveRoomId(t, { kind: 'code', code: c1 }, { now: () => clock.now })).toBeNull();
     expect(await resolveRoomId(t, { kind: 'code', code: s2.code }, { now: () => clock.now })).toBe(token);
     await s2.close();
+  });
+
+  it('review sim-3 §4: a resume while the delete fails keeps the old code remembered, and the next session online deletes it', async () => {
+    const base = createFakeTransport();
+    const token = generateRoomToken();
+    const storage = memStorage();
+    const s1 = await createHostSession(base, undefined, { token, openCode: openCodeStore(storage) });
+    const c1 = s1.code; // the page goes away with C1 open
+    // Resumed with the delete failing (offline for that call): the new code still opens.
+    let deletesFail = true;
+    const flaky: RelayTransport = { ...base, async clearAlias(code) { if (deletesFail) throw new Error('offline'); return base.clearAlias(code); } };
+    const s2 = await createHostSession(flaky, undefined, { token, openCode: openCodeStore(storage) });
+    expect(await base.resolveAlias(c1)).toBe(token); // still there…
+    expect(loadStaleCodes(storage)).toContain(c1); // …and not forgotten
+    // Online again: the next session deletes it and forgets it.
+    deletesFail = false;
+    await s2.close();
+    const s3 = await createHostSession(flaky, undefined, { token, openCode: openCodeStore(storage) });
+    expect(await base.resolveAlias(c1)).toBeNull();
+    expect(loadStaleCodes(storage)).not.toContain(c1);
+    await s3.close();
   });
 
   it('the open code is remembered beside the token and forgotten when cleared', async () => {

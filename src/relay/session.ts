@@ -291,7 +291,12 @@ export interface CreateHostOptions {
   /** Where the code this room has open is remembered beside the host token
    *  (pairingStore.openCodeStore). A resumed room clears the remembered
    *  code's alias first: a code left open by a reload never resolves again. */
-  openCode?: { load: () => string | null; save: (code: string | null) => void };
+  openCode?: {
+    load: () => string | null;
+    save: (code: string | null) => void;
+    /** Codes whose delete failed (offline): kept until one works. */
+    stale?: { load: () => string[]; add: (code: string) => void; remove: (code: string) => void };
+  };
 }
 
 const RESUME_TOKEN_RE = /^[0-9A-Z]{24}$/;
@@ -309,10 +314,20 @@ export async function createHostSession(
   // the token can't be worked out from it, and it changes with each window.
   let code = generatePairCode();
   const openStore = opts.openCode;
-  if (token === opts.token && openStore) {
+  // The code a reload left open (and any whose delete failed before) is
+  // deleted first; one that cannot be deleted now stays remembered and is
+  // tried again by the next session — never forgotten while it may still
+  // point at a room (review sim-3 §4).
+  async function clearLeftCodes(): Promise<void> {
+    if (!openStore) return;
     const left = openStore.load();
-    if (left && left !== code) await inTime(transport.clearAlias(left)).catch(() => undefined);
+    const codes = [...new Set([...(left && left !== code ? [left] : []), ...(openStore.stale?.load() ?? [])])].filter((c) => c !== code);
+    for (const c of codes) {
+      const ok = await inTime(transport.clearAlias(c)).then(() => true, () => false);
+      if (ok) openStore.stale?.remove(c); else openStore.stale?.add(c);
+    }
   }
+  if (openStore && (token === opts.token || openStore.stale?.load().length)) await clearLeftCodes();
   const core = makeCore('host', transport, token);
   const sid = Array.from(random(6), (b) => (b % 36).toString(36)).join('') + Date.now().toString(36);
   const now = opts.now ?? (() => Date.now());

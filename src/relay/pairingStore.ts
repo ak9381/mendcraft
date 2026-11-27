@@ -162,9 +162,39 @@ export function saveOpenCode(storage: StorageLike | null | undefined, code: stri
   else remove(storage, K_OPEN_CODE);
 }
 
-/** The load/save pair createHostSession takes (opts.openCode). */
-export function openCodeStore(storage: StorageLike | null | undefined): { load: () => string | null; save: (code: string | null) => void } {
-  return { load: () => loadOpenCode(storage), save: (code) => saveOpenCode(storage, code) };
+const K_STALE_CODES = 'mc.relay.staleCodes';
+const STALE_MAX = 8;
+
+/** Codes whose alias doc could not be deleted yet (offline at the time):
+ *  remembered until a delete works, so none is ever forgotten while it still
+ *  points at a room (review sim-3 §4). */
+export function loadStaleCodes(storage: StorageLike | null | undefined): string[] {
+  let raw: unknown = null;
+  try { raw = JSON.parse(read(storage, K_STALE_CODES) ?? 'null'); } catch { raw = null; }
+  return Array.isArray(raw) ? raw.filter((c): c is string => typeof c === 'string' && CODE_RE.test(c)).slice(0, STALE_MAX) : [];
+}
+function saveStaleCodes(storage: StorageLike | null | undefined, codes: string[]): void {
+  const list = [...new Set(codes)].slice(-STALE_MAX);
+  if (list.length) write(storage, K_STALE_CODES, JSON.stringify(list)); else remove(storage, K_STALE_CODES);
+}
+
+export interface OpenCodeStore {
+  load: () => string | null;
+  save: (code: string | null) => void;
+  stale: { load: () => string[]; add: (code: string) => void; remove: (code: string) => void };
+}
+
+/** The store createHostSession takes (opts.openCode). */
+export function openCodeStore(storage: StorageLike | null | undefined): OpenCodeStore {
+  return {
+    load: () => loadOpenCode(storage),
+    save: (code) => saveOpenCode(storage, code),
+    stale: {
+      load: () => loadStaleCodes(storage),
+      add: (code) => saveStaleCodes(storage, [...loadStaleCodes(storage), code]),
+      remove: (code) => saveStaleCodes(storage, loadStaleCodes(storage).filter((c) => c !== code)),
+    },
+  };
 }
 
 /** Disconnect: this laptop forgets its room (C2). The next pairing mints a
@@ -172,6 +202,10 @@ export function openCodeStore(storage: StorageLike | null | undefined): { load: 
 export function forgetHostRoom(storage: StorageLike | null | undefined): void {
   clearHostToken(storage);
   remove(storage, K_HOST_PHONE);
+  // The open code is not forgotten until its alias doc is gone: the next
+  // session deletes it (it may still point at this room).
+  const open = loadOpenCode(storage);
+  if (open) saveStaleCodes(storage, [...loadStaleCodes(storage), open]);
   remove(storage, K_OPEN_CODE);
 }
 

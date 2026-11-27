@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   loadPhonePair, savePhonePair, clearPhonePair, rememberPhoneSide,
-  loadHostToken, saveHostToken, clearHostToken, rememberHostPhone, hostRoomToResume, forgetHostRoom, saveOpenCode, loadOpenCode,
+  loadHostToken, saveHostToken, clearHostToken, rememberHostPhone, hostRoomToResume, forgetHostRoom, saveOpenCode, loadOpenCode, loadStaleCodes,
   ensureDeviceId, loadPhonePin, savePhonePin, clearPhonePin,
   type StorageLike,
 } from '../src/relay/pairingStore';
@@ -89,6 +89,7 @@ describe('C2: which room a new pairing opens', () => {
     forgetHostRoom(s);
     expect(loadHostToken(s)).toBeNull();
     expect(loadOpenCode(s)).toBeNull();
+    expect(loadStaleCodes(s)).toEqual(['AB12CD']); // its alias doc is deleted by the next session
     saveHostToken(s, TOKEN); // even the same token saved again is not resumed: no phone is remembered in it
     expect(hostRoomToResume(s)).toBeUndefined();
   });
