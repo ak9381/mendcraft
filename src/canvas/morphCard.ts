@@ -30,7 +30,7 @@ export interface MorphCardUi {
   showWorking(line: string): void;
   /** "Changed." + Undo chip; auto-closes after 6000 ms (then onAutoClose). */
   showDone(): void;
-  /** "Didn't hear anything — pinch-hold again, or press Talk." auto-closes after 5000 ms. */
+  /** "Didn't hear anything — hold the board again, or press Talk." auto-closes after 5000 ms. */
   showEmpty(): void;
   /** Error line, e.g. "Couldn't make that change." auto-closes after 5000 ms. */
   showError(line: string): void;
@@ -46,7 +46,7 @@ const LISTENING_ON_HTML =
   '<span class="mc-morph-dot is-sage" aria-hidden="true"></span>Listening… say it, or Cancel.';
 const LISTENING_OFF_HTML =
   '<span class="mc-morph-dot is-sage" aria-hidden="true"></span>Type it in the say box, or Cancel.';
-const EMPTY_LINE = "Didn't hear anything — pinch-hold again, or press Talk.";
+const EMPTY_LINE = "Didn't hear anything — hold the board again, or press Talk.";
 
 function viewportWidth(): number {
   return typeof innerWidth === 'number' ? innerWidth : 1280;

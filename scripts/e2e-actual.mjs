@@ -1575,8 +1575,99 @@ async function layout(page) {
 }
 SECTIONS.layout = layout;
 
+// ---- swoffline: the S5 shot for real — load online twice, the network really
+// off (CDP, page AND service worker), reload: the canvas opens from the
+// service worker, hands start from the cached MediaPipe files, the Kannada
+// pack is still on, a typed ask still drafts, and nothing claims "simulated".
+// Needs a production build (`vite build` + `vite preview`, VITE_E2E=1 for the
+// hooks); on the dev server there is no service worker, so it is skipped.
+const MP_HOST = /cdn\.jsdelivr\.net\/npm\/@mediapipe|storage\.googleapis\.com\/mediapipe-models/;
+async function swoffline() {
+  const sw = await fetch(`${BASE}/sw.js`).then((r) => r.text()).catch(() => '');
+  if (!sw || sw.includes('__MC_BUILD__')) { console.log('skip swoffline: no built service worker here (run against `vite preview` of a build)'); return; }
+  const trackingCache = (/const TRACKING_CACHE = "([^"]+)"/.exec(sw) ?? [])[1];
+  // Its own browser: a fake camera so hand tracking really starts.
+  const browser = await require('puppeteer-core').launch({ executablePath: findChrome(), headless: 'new', args: ['--no-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    const ctx = browser.defaultBrowserContext();
+    await ctx.overridePermissions(BASE, ['camera', 'microphone']).catch(() => {});
+    const { replies, recorded, liveShape } = loadReplies(WRITTEN);
+    await page.evaluateOnNewDocument((r, rec, ls) => { window.__mcFixtures = { replies: r, recorded: rec, liveShape: ls }; }, replies, recorded, liveShape);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e?.message || e)));
+    const kn = KN_PACK_REPLY.strings;
+
+    // Online load 1: approve the Kannada pack (as she would, before the shot).
+    if (!(await open(page, 'fresh=1&sim=1'))) return;
+    await page.evaluate(() => { window.__mcCanvas.run('add Kannada'); });
+    if (!(await waitFor(page, reviewOpen, 15_000, 'swoffline: the Kannada review opens'))) return;
+    await page.evaluate(() => window.__mcCanvas.keep());
+    if (!(await waitFor(page, (s) => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === s, 5_000, 'swoffline: Kannada after Approve', kn.showEverything))) return;
+    await waitFor(page, () => window.__mcArtifacts.list().then((l) => l.some((a) => a.id === 'pack-kn')), 5_000, 'swoffline: pack-kn stored');
+    await sleep(1200); // past the save debounce
+
+    // Online load 2: the service worker controls the page and holds the tracking files.
+    if (!(await open(page, 'sim=1'))) return;
+    if (!(await waitFor(page, () => !!navigator.serviceWorker?.controller, 15_000, 'swoffline: the service worker controls the canvas'))) return;
+    check(true, 'swoffline: the canvas page itself registered the service worker');
+    if (!(await waitFor(page, (name, n) => caches.open(name).then((c) => c.keys()).then((k) => k.length >= n), 120_000, 'swoffline: the four MediaPipe files are cached', trackingCache, 4))) return;
+    check(true, `swoffline: the MediaPipe wasm + models are in ${trackingCache}`);
+    const precached = await page.evaluate(() => caches.keys().then(async (ks) => { const n = ks.find((k) => k.startsWith('mendcraft-shell-')); return n ? (await (await caches.open(n)).keys()).map((r) => new URL(r.url).pathname) : []; }));
+    check(precached.includes('/canvas.html') && precached.some((p) => /^\/assets\/canvas-.*\.js$/.test(p)), `swoffline: the shell and the canvas bundle are precached (got ${precached.length} files)`);
+
+    // The network really off: the page and its service worker.
+    const swTarget = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().startsWith(BASE), { timeout: 10_000 });
+    const swSession = await swTarget.createCDPSession();
+    const OFF = { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+    await swSession.send('Network.enable');
+    await swSession.send('Network.emulateNetworkConditions', OFF);
+    await page.setOfflineMode(true);
+    const probe = await swSession.send('Runtime.evaluate', { expression: `fetch('/manifest.webmanifest?probe=' + Date.now(), { cache: 'no-store' }).then(() => 'online', () => 'offline')`, awaitPromise: true });
+    check(probe.result?.value === 'offline', `swoffline: the service worker's own network is off (got ${probe.result?.value})`);
+
+    const mpFailed = [];
+    page.on('requestfailed', (r) => { if (MP_HOST.test(r.url())) mpFailed.push(`${r.url().slice(-40)} ${r.failure()?.errorText}`); });
+    const fromSw = [];
+    page.on('response', (r) => { if (r.fromServiceWorker()) fromSw.push(r.url()); });
+
+    // Reload offline.
+    if (!(await open(page, 'sim=1'))) return;
+    check(await page.evaluate(() => navigator.onLine === false), 'swoffline: the reloaded page is offline');
+    check(fromSw.some((u) => /canvas\.html/.test(u)), 'swoffline: canvas.html came from the service worker');
+    await waitFor(page, (s) => document.querySelector('[data-i18n=showEverything]')?.textContent.trim() === s, 8_000, 'swoffline: still Kannada', kn.showEverything)
+      .then((ok) => ok && check(true, 'swoffline: offline reload → still Kannada'));
+    const btn = await page.evaluate(() => document.querySelector('[data-cmd=offline]')?.textContent.trim());
+    check(!/simulated|ಅನುಕರಣೆ/i.test(btn ?? ''), `swoffline: the offline toggle does not claim "simulated" (got ${JSON.stringify(btn)})`);
+    await waitFor(page, () => (window.__mcCanvas.statusSince(0) ?? []).some((t) => /^Hands on\./.test(t) || /hand|camera|MediaPipe/i.test(t) && /couldn|could not|blocked|failed|No camera/i.test(t)), 45_000, 'swoffline: hands answer');
+    const handLines = await page.evaluate(() => (window.__mcCanvas.statusSince(0) ?? []).filter((t) => /hand|camera|MediaPipe/i.test(t)));
+    check(handLines.some((t) => /^Hands on\./.test(t)), `swoffline: hand tracking starts offline (got ${JSON.stringify(handLines.slice(0, 3))})`);
+    check(mpFailed.length === 0, `swoffline: no MediaPipe fetch failed (got ${JSON.stringify(mpFailed.slice(0, 3))})`);
+    check(fromSw.filter((u) => MP_HOST.test(u)).length >= 2, `swoffline: the MediaPipe files came from the service worker (got ${fromSw.filter((u) => MP_HOST.test(u)).length})`);
+
+    // A typed ask, offline: the review opens with the on-device draft line.
+    // (The say box sits in the tools palette; this is what Enter in it does.)
+    await page.evaluate(() => { const i = document.querySelector('#mc-say-in'); i.value = 'make a dashboard for my lamp'; i.closest('form').requestSubmit(); });
+    if (await waitFor(page, reviewOpen, 15_000, `swoffline: a typed ask opens a review offline`)) {
+      const text = await page.evaluate(reviewText);
+      check(true, 'swoffline: a typed ask works offline');
+      check(/offline/i.test(text) || /Nano|Replay/.test(text), `swoffline: the review says it was drafted on the device (got ${JSON.stringify(text.slice(0, 200))})`);
+    }
+    const talkLines = await page.evaluate(() => (window.__mcCanvas.statusSince(0) ?? []).filter((t) => /pinch/i.test(t)));
+    check(talkLines.length === 0, `swoffline: no line says pinch (got ${JSON.stringify(talkLines)})`);
+    check(errors.length === 0, `swoffline: no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
+
+    await page.setOfflineMode(false);
+    await swSession.send('Network.emulateNetworkConditions', { ...OFF, offline: false }).catch(() => {});
+  } finally {
+    await browser.close();
+  }
+}
+SECTIONS.swoffline = swoffline;
+
 /** Journey order (spec §10); the whole journey, on one page, last. */
-const ORDER = ['boot', 'layout', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'recordmode', 'journey'];
+const ORDER = ['boot', 'layout', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'recordmode', 'swoffline', 'journey'];
 
 async function main() {
   const unordered = Object.keys(SECTIONS).filter((n) => !ORDER.includes(n));

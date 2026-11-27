@@ -29,6 +29,17 @@ function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
+/** The save-time warning when her recording already triggers a built-in.
+ *  The built-in catalog's names come from the old studio (pinch gestures);
+ *  the canvas never asks her to pinch, so those are named generically. */
+export function teachConflictLine(conflict: { label: string; does: string } | undefined): string {
+  if (!conflict) return '';
+  const what = /pinch/i.test(`${conflict.label} ${conflict.does}`)
+    ? 'a hand gesture Mendcraft already uses'
+    : `the built-in “${esc(conflict.label)}” (${esc(conflict.does)})`;
+  return `<p class="mc-teach-conflict">This looks like ${what}. Saving will use yours instead when it matches confidently.</p>`;
+}
+
 export interface TeachPanelOptions {
   devices(): DeviceRef[];
   engines?: GestureActionEngines;
@@ -199,9 +210,7 @@ export function mountTeachPanel(root: HTMLElement, opts: TeachPanelOptions): Tea
     }
     if (parsed.engine !== 'rules' && parsed.prompt) opts.onModelSent?.(parsed.engine, parsed.prompt);
     const conflict = builtinConflict(frames, result.kind);
-    const conflictLine = conflict
-      ? `<p class="mc-teach-conflict">This looks like the built-in “${esc(conflict.label)}” (${esc(conflict.does)}). Saving will use yours instead when it matches confidently.</p>`
-      : '';
+    const conflictLine = teachConflictLine(conflict);
     const engineLabel = parsed.engine === 'rules' ? 'Rules · on device' : parsed.engine === 'nano' ? 'Nano · on device' : 'Gemini · cloud';
     const proposal = createSurfaceProposal(`teach-${Date.now()}`, parsed.engine === 'rules' ? 'rules' : parsed.engine, parsed.summary, [], () => {});
     const card = document.createElement('article');

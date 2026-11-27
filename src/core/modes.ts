@@ -162,7 +162,7 @@ export const planMode: EditorMode = {
   exampleCommand: 'two bedroom plan',
   help:
     'Say or type a plan like "two bedroom plan", or an edit like "room 4 by 3", "add a door", ' +
-    '"make this wall 4 meters", "move it 500 left", or "thicker by 50". Click/pinch a wall to ' +
+    '"make this wall 4 meters", "move it 500 left", or "thicker by 50". Click or fist-tap a wall to ' +
     'select it and drag to move it with snap. Export a DXF for AutoCAD / LibreCAD / QCAD.',
   exportLabel: 'Export DXF',
   starterItems: ['two bedroom plan', 'studio', 'room 4 by 3'],

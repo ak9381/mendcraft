@@ -94,7 +94,7 @@ import { mountScanPanel } from './scanPanel';
 import { computeSignature } from '../input/faceLogic';
 import type { PresenceFrame } from '../input/presence';
 import { mountTeachPanel } from './teachPanel';
-import { OFFLINE_QUICK_ONLY } from '../ux/wording';
+import { OFFLINE_QUICK_ONLY, REAL_OFFLINE_LABEL, REAL_OFFLINE_LINE } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
@@ -390,6 +390,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let savedAt: string | null = null;
   let pack: LanguagePack | null = doc.pack ?? null;
   const net = createConnectivity<string>(opts.online ?? (typeof navigator !== 'undefined' ? navigator.onLine : true));
+  /** The browser says the network is off (Wi-Fi off) — not the Demo toggle. */
+  const reallyOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false;
+  /** True only while the Demo toggle is what holds the network off. */
+  let offlineSimulated = false;
   /** Display-only fitted size of the focused board (fitBoardWidth). */
   const focusFit = new Map<string, { w: number; h: number }>();
   let nextChips: NextChips | null = null; // next-step chips on the focused board (set up below)
@@ -5517,14 +5521,31 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   // ---- offline (simulate + real) ----
-  function setOnline(on: boolean, announce = false): void {
+  /** The Demo toggle's label. "(simulated)" only while the toggle is what
+   *  holds the network off; really offline it reads plainly, in any pack. */
+  function paintOfflineButton(on: boolean): void {
+    const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
+    btn.setAttribute('aria-pressed', String(!on));
+    if (on || offlineSimulated) {
+      btn.dataset.i18n = on ? 'simulateOffline' : 'offlineOn'; // survives applyStrings
+      btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
+    } else {
+      delete btn.dataset.i18n; // a pack's "(simulated)" must not paint over it
+      btn.textContent = REAL_OFFLINE_LABEL;
+    }
+  }
+  /** The Demo toggle (button, "simulate offline", "back online"). Really
+   *  offline there is nothing to simulate and the network cannot be wished back. */
+  function toggleSimOffline(): void {
+    if (reallyOffline()) { say(REAL_OFFLINE_LINE); return; }
+    setOnline(!net.isOnline(), true, true);
+  }
+  function setOnline(on: boolean, announce = false, simulated = false): void {
+    offlineSimulated = !on && simulated;
     net.setOnline(on);
     engineBar?.setOffline(!on);
     nextChips?.refresh();
-    const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!;
-    btn.setAttribute('aria-pressed', String(!on));
-    btn.dataset.i18n = on ? 'simulateOffline' : 'offlineOn'; // survives applyStrings
-    btn.textContent = str(on ? 'simulateOffline' : 'offlineOn');
+    paintOfflineButton(on);
     if (on) {
       const later = net.drainLater();
       // Language asks still waiting from an earlier reconnect count too.
@@ -5738,7 +5759,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           case 'handsAlways': if (handsAlways) say('Hands are already always on.'); else setHandsAlways(true); break;
           case 'handsFollowFace': if (!handsAlways) say('Hands already follow your face.'); else setHandsAlways(false); break;
           case 'register': openScan(); break;
-          case 'offline': if (!net.isOnline()) say('Already offline (simulated).'); else press('offline'); break;
+          case 'offline': if (reallyOffline()) say(REAL_OFFLINE_LINE); else if (!net.isOnline()) say('Already offline (simulated).'); else press('offline'); break;
           case 'online': if (net.isOnline()) say('Already online.'); else press('offline'); break;
           case 'swap': if (phoneShell || !(opts.sim || hostSession)) say('No phones are paired, so there are no sides to swap.'); else swapPhoneSides(); break;
         }
@@ -5896,7 +5917,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // Delegated on root: on phones some tools live in the menu sheet (phoneMenu.ts).
   root.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('[data-cmd]'); if (!b) return;
-    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => setOnline(!net.isOnline(), true), hands: () => void toggleHands(), handsalways: () => setHandsAlways(!handsAlways), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), artifacts: openArtifacts, swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
+    ({ everything: () => void overview(), new: newBoard, save, undo: userUndo, ai: () => { showAi(true, true); aiPanel.querySelector<HTMLElement>('.mc-ai-body')?.scrollTo?.({ top: 0 }); }, monitor: openMonitor, activity: openActivity, offline: () => toggleSimOffline(), hands: () => void toggleHands(), handsalways: () => setHandsAlways(!handsAlways), dwell: () => { setDwellClick(!dwellClickOn); say(dwellClickOn ? 'Hover to click on: rest your palm on a button to press it.' : 'Hover to click off: tap a fist to click.'); }, register: openScan, reregister: openScan, teach: openTeach, gestures: openTeachList, voice: () => voiceSheet.open(), artifacts: openArtifacts, swap: swapPhoneSides, readAloud: () => setReadAloud(!readAloud) } as Record<string, () => void>)[b.dataset.cmd!]?.();
   });
   const phoneMenu = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? mountPhoneMenu(root) : null;
   const toolPalette = mountToolPalette(root, window, { onChange: () => showArrangeStrip() });
@@ -6803,7 +6824,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   applyStrings();
   if (pack) opts.voice?.setLang?.(resolveLanguage(pack.lang).speechLang);
   // Opened offline: the Gemini card says Offline from the start, as the toggle does.
-  if (!net.isOnline()) { const btn = root.querySelector<HTMLElement>('[data-cmd=offline]')!; btn.setAttribute('aria-pressed', 'true'); btn.dataset.i18n = 'offlineOn'; btn.textContent = str('offlineOn'); engineBar?.setOffline(true); }
+  // Opened with the network off is real (not the Demo toggle) unless a test
+  // passed online: false with the browser online.
+  if (!net.isOnline()) { offlineSimulated = !reallyOffline(); paintOfflineButton(false); engineBar?.setOffline(true); }
 
   // Boot report: stored items that failed their check (one terminal line
   // each; the rest loaded), and storage that can't keep anything — said once.

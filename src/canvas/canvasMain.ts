@@ -34,6 +34,10 @@ import type { CanvasDoc } from './frames';
 import { clearStoreForFresh, createOneWriter, createSaveFailNotice, loadLayout, loadLine, openFresh, reservedIds, revertFailedSave, saveCanvasDoc, STORE_SAVE_OFF_LINE, type SaveFailure } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 import { wizTokenFreeUrl } from '../devices/wizClient';
+import { registerServiceWorker } from '../offline/registerSw';
+
+// Offline reloads (Wi-Fi off → reload) open from the service worker's copy.
+registerServiceWorker();
 
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */

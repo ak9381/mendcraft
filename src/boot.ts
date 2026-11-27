@@ -14,6 +14,7 @@
 
 import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
 import { loadFlags } from './core/flags';
+import { registerServiceWorker } from './offline/registerSw';
 
 const flags = loadFlags();
 
@@ -85,12 +86,8 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
 }
 
 // Register the PWA service worker in production builds only (dev keeps HMR
-// untouched). It is network-first, so it never serves stale JS while online —
-// it just makes the installed /phone remote resilient when the LAN drops.
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js').catch(() => undefined);
-  });
-}
+// untouched). It is network-first for app files, so it never serves stale JS
+// while online; it keeps a copy for offline (see public/sw.js).
+registerServiceWorker();
 
 export {};

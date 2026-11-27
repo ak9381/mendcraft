@@ -370,7 +370,7 @@ export function mountReviewDialog(
   // so it can never cover Approve/Reject/Ask-else.
   const closeBtn = btn(doc, 'mc-review-close', '✕', () => close());
   closeBtn.setAttribute('aria-label', 'Close without deciding');
-  closeBtn.setAttribute('title', 'Close — decide later with voice or a pinch');
+  closeBtn.setAttribute('title', 'Close — decide later with your voice or a fist tap');
   drag.append(titleWrap);
   head.append(drag, closeBtn);
   body.append(askedEl, planSec, honesty, actions);

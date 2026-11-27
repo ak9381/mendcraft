@@ -294,7 +294,7 @@ export class PlanEngine {
     if (target === 'selected') {
       const ids = state.walls.map((w) => w.id);
       if (!ids.length) return 'No wall is selected yet, and the plan has no walls.';
-      return `No wall is selected. Pinch or click a wall first (e.g. ${ids.slice(0, 3).join(', ')}).`;
+      return `No wall is selected. Tap a wall with a fist or click it first (e.g. ${ids.slice(0, 3).join(', ')}).`;
     }
     return `no wall for target "${target}"`;
   }

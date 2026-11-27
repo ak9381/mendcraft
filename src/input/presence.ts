@@ -36,11 +36,7 @@ import { ensureSquareCanvas, unletterboxLandmarks } from './squareFrame';
 export type { HandEvent, HandFrame } from './handLogic';
 export type { FaceBox } from './faceLogic';
 
-const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm';
-const HAND_MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-const FACE_MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+import { FACE_MODEL_URL, HAND_MODEL_URL, WASM_BASE } from './trackingAssets';
 
 /** FaceLandmarker interval — a few fps, so the Facing pill stays cheap. */
 export const FACE_INTERVAL_MS = 200;

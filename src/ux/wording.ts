@@ -16,6 +16,10 @@ export const LATER_LIST_PROMISE = "I'll do these when you're back online";
 export const GETTING_QUICK_READY = 'Getting Quick ready';
 export const QUICK_READY = 'Quick ready';
 export const OFFLINE_QUICK_ONLY = 'Offline · Quick only';
+/** The Demo toggle's label while the network is really off (never "simulated"). */
+export const REAL_OFFLINE_LABEL = 'Offline · network off';
+/** Said when she asks to simulate offline / come back online while the network is really off. */
+export const REAL_OFFLINE_LINE = 'Already offline: the network is off. It comes back when the connection does.';
 export const STAYS_ON_THIS_DEVICE = 'Stays on this device';
 export const ESCALATION_LINE = "Quick wasn't sure, so Deep checked";
 export const ESCALATION_ROUTE = "Quick wasn't sure, so Deep double-checked.";
@@ -25,9 +29,9 @@ export const FILLED_ON_DEVICE_SUFFIX = '· names filled in on device';
 export const WHY_HERE = 'Why here';
 export const WHY_ONLINE = 'Why online';
 
-export const PINCH_KEEP = 'PINCH  keep';
+export const PINCH_KEEP = 'FIST TAP  keep';
 export const BRUSH_DROP = 'BRUSH  drop';
-export const PINCH_HOLD_SEND = 'PINCH AND HOLD  send';
+export const PINCH_HOLD_SEND = 'HOLD A FIST  send';
 
 export type HelperName = 'Quick' | 'Deep' | 'Browser';
 

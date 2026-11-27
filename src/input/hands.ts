@@ -3,9 +3,7 @@
 
 import { FilesetResolver, HandLandmarker, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
 
-const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm';
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+import { HAND_MODEL_URL as MODEL_URL, WASM_BASE } from './trackingAssets';
 
 import { createHandsProcessor, type HandEvent, type HandFrame } from './handLogic';
 
