@@ -82,6 +82,16 @@ export function planFromReply(text: string): PlanFromReply {
   const asked = (Array.isArray(raw.doors) ? raw.doors.length : 0) + (Array.isArray(raw.windows) ? raw.windows.length : 0);
   const drawn = pd.openings.length;
   const findings = checkPlanAccessibility(pd).map((i) => plainFinding(i.message, pd));
+  // One room: a door or window naming any other room is put on that room
+  // (the shared expansion's lenient match) — said, never passed off as asked.
+  if (pd.rooms.length === 1) {
+    const only = pd.rooms[0];
+    const named = [...(Array.isArray(raw.doors) ? raw.doors : []), ...(Array.isArray(raw.windows) ? raw.windows : [])]
+      .map((o) => (isObj(o) && (typeof o.room === 'string' || typeof o.room === 'number') ? String(o.room).trim().toLowerCase() : null))
+      .filter((n): n is string => n !== null);
+    const moved = named.filter((n) => n !== only.name.toLowerCase() && n !== only.id.toLowerCase() && Number(/(\d+)/.exec(n)?.[1]) !== 1).length;
+    if (moved) findings.push(`${moved} door${moved === 1 ? '' : 's'} or window${moved === 1 ? '' : 's'} named a room not in the plan; ${moved === 1 ? 'it was' : 'they were'} put on the ${only.name}.`);
+  }
   if (drawn < asked) {
     const n = asked - drawn;
     findings.push(`Left out ${n} door${n === 1 ? '' : 's'} or window${n === 1 ? '' : 's'} that named a room or side not in the plan${asked > MAX_GENERATE_OPENINGS ? `, or came after the first ${MAX_GENERATE_OPENINGS}` : ''}.`);

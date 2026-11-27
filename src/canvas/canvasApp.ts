@@ -2946,8 +2946,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** "draw the floor plan" (voice, chip, gesture, the empty-board button):
    *  Gemini writes the plan as a document, code draws it as checked geometry
    *  (planGenerate.ts), and she reviews the rooms and the checks. Approve
-   *  opens it on a NEW board of its own — never written into a dashboard or
-   *  any other board — with the drawing stored BESIDE the board's surface
+   *  opens it on a board of its own — the empty board she is on, else an
+   *  empty floor-plan board, else a new one; never written into a board that
+   *  shows something — with the drawing stored BESIDE the board's surface
    *  plan. Reject, or a reply that fails its check, changes nothing. */
   function openFloorPlan(_from: string | null, utterance = 'start a floor plan'): void {
     void floorPlanTurn(utterance).finally(() => settleEngines());
@@ -2957,7 +2958,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!net.isOnline()) { say('Drawing a floor plan needs Gemini, and you are offline. Nothing was generated.', { speak: true }); return; }
     const engine = engineFor('gemini', 'plan');
     if (!engine) { noModel('gemini'); return; }
-    if (reg.list().length >= MAX_FRAMES) { say(`The canvas holds ${MAX_FRAMES} boards. Close one first. Nothing was generated.`, { speak: true }); return; }
+    // Refused only when the plan would need a NEW board: an empty board she
+    // is on (or an empty floor-plan board) still takes it on a full canvas.
+    if (floorPlanTarget({ frames: reg.list(), surfaces, from: focusId }).make && reg.list().length >= MAX_FRAMES) {
+      say(`The canvas holds ${MAX_FRAMES} boards. Close one first. Nothing was generated.`, { speak: true }); return;
+    }
     const routeOf = (): string => {
       const rl = engine.routeLine ?? PLAN_GENERATE_ROUTE_LINE;
       return engine.sim && !rl.startsWith('SIM') ? `SIM · ${rl}` : rl;
@@ -3012,7 +3017,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       };
       const keepIt = (): void => {
         prop.accept();
-        // Applied only now: a new board of kind plan, its plan tile blank,
+        // Applied only now: a board of kind plan, its plan tile blank,
         // the drawing beside it (re-checked as the artifact it becomes).
         // Where: the empty board she is on, else an empty floor-plan
         // board, else a new one — never a board that already shows something.
@@ -3046,10 +3051,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish('Dropped. Nothing changed.'); } });
       tagCardI18n(card);
       pending = { frameId: 'p-floorplan', prop, card };
+      // Where it will open, as things stand now (chosen again at Approve).
+      const where = floorPlanTarget({ frames: reg.list(), surfaces, from: focusId });
+      const opensOn = where.make || !where.id ? 'It opens on a new board.'
+        : where.id === focusId ? 'It opens on the empty board you are on.'
+        : `It opens on the empty board “${reg.get(where.id)?.title ?? FLOOR_PLAN_TITLE}”.`;
       showReview({
         title: summary, card, extra: buildReviewExtra(),
         changes: planGenerateChanges(r.rooms),
-        notes: [...r.findings, 'Code drew every wall from the rooms Gemini placed, and checked them. It opens on a new board.'],
+        notes: [...r.findings, `Code drew every wall from the rooms Gemini placed, and checked them. ${opensOn}`],
         facts: reviewFacts(sent, utterance),
       }, { tokens: [sent], facts: () => reviewFacts(sent, utterance) });
       say(`${summary}. Approve or say “keep”; Reject or say “drop”.`);

@@ -72,6 +72,19 @@ describe('planFromReply', () => {
     if (r.ok) expect(r.findings).toContain('Left out 2 doors or windows that named a room or side not in the plan.');
   });
 
+  it('a one-room plan: a door naming another room is put on the only room, and the review says so', () => {
+    const r = planFromReply(JSON.stringify({ rooms: [room('Studio', 0, 0, 6000, 4000)], doors: [{ room: 'Studio', side: 's' }, { room: 'Garage', side: 'n' }], windows: [{ room: 'room 1', side: 'e' }] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.findings).toContain('1 door or window named a room not in the plan; it was put on the Studio.');
+      expect(r.findings.some((f) => f.startsWith('Left out'))).toBe(false);
+    }
+    const two = planFromReply(JSON.stringify({ rooms: [room('Studio', 0, 0, 6000, 4000)], doors: [{ room: 'Garage', side: 's' }, { room: 'Hall', side: 'n' }] }));
+    if (two.ok) expect(two.findings).toContain('2 doors or windows named a room not in the plan; they were put on the Studio.');
+    const fine = planFromReply(JSON.stringify({ rooms: [room('Studio', 0, 0, 6000, 4000)], doors: [{ room: 'studio', side: 's' }] }));
+    if (fine.ok) expect(fine.findings.some((f) => /named a room/.test(f))).toBe(false);
+  });
+
   it('prose around the JSON is tolerated', () => {
     const r = planFromReply(`Sure! Here you go.\n${JSON.stringify({ rooms: [room('Studio', 0, 0, 6000, 4000)] })}\nHope it helps.`);
     expect(r.ok).toBe(true);
@@ -172,6 +185,46 @@ describe('a generated floor plan on its own board', () => {
     const again = mount({ doc: joinCanvasDoc(out.layout, left) });
     expect(again.h.frames()).toEqual([]);
     expect(again.h.snapshot().drawings).toBeUndefined();
+  });
+
+  it('the review says where the plan opens: a new board, or the empty board she is on', async () => {
+    const notes = (root: HTMLElement): string => [...root.ownerDocument.querySelectorAll('.mc-review-dialog .mc-review-note')].map((n) => n.textContent ?? '').join(' | ');
+    const { root } = await generate([]);
+    expect(notes(root)).toContain('It opens on a new board.');
+    handle?.destroy(); handle = null; document.body.innerHTML = '';
+    const engines = createReplayEngines({ 'gemini.plan': REPLY });
+    const m = mount({ engines });
+    m.h.run('new board');
+    await m.h.focus(m.h.frames()[0].id);
+    m.h.run('draw a two bedroom floor plan');
+    await vi.waitFor(() => expect(reviewTitle(m.root)).not.toBe(''), { timeout: 8000 });
+    expect(notes(m.root)).toContain('It opens on the empty board you are on.');
+    expect(notes(m.root)).not.toContain('new board');
+  });
+
+  it('a full canvas refuses only when the plan needs a new board; an empty board still takes it', async () => {
+    const layout = (n: number) => ({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1',
+      frames: Array.from({ length: n }, (_, i) => ({ id: `f${i + 1}`, kind: 'note' as const, title: `Board ${i + 1}`, rect: { x: i * 1100, y: 0, w: 1000, h: 680 }, pinned: false })) });
+    const filled = (id: string) => ({ id: `board-${id}`, kind: 'board' as const, v: 1, title: 'B', by: 'person' as const, at: 1, status: 'approved' as const,
+      data: { frame: { kind: 'room', title: 'B', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }, plan: { kind: 'room', title: 'B', tiles: [{ type: 'stat', label: 'T', value: '1' }] } } });
+    // 40 boards, f1 (focused) empty: the plan goes there.
+    const ids = Array.from({ length: 40 }, (_, i) => `f${i + 1}`);
+    const docEmpty = joinCanvasDoc(layout(40), ids.slice(1).map(filled)) as CanvasDoc;
+    const engines = createReplayEngines({ 'gemini.plan': REPLY });
+    const a = mount({ engines, doc: docEmpty });
+    expect(a.h.frames()).toHaveLength(40);
+    a.h.run('draw a two bedroom floor plan');
+    await vi.waitFor(() => expect(reviewTitle(a.root)).not.toBe(''), { timeout: 8000 });
+    a.h.keep();
+    await vi.waitFor(() => expect(a.h.snapshot().surfaces.f1?.kind).toBe('plan'));
+    handle?.destroy(); handle = null; document.body.innerHTML = '';
+    // 40 boards, all showing something: refused before anything is generated.
+    const docFull = joinCanvasDoc(layout(40), ids.map(filled)) as CanvasDoc;
+    const b = mount({ engines: createReplayEngines({ 'gemini.plan': REPLY }), doc: docFull });
+    const mark = b.h.statusMark();
+    b.h.run('draw a two bedroom floor plan');
+    await vi.waitFor(() => expect(b.h.statusSince(mark).join(' ')).toContain('The canvas holds 40 boards'));
+    expect(reviewOpen(b.root)).toBe(false);
   });
 
   it('an empty board she is on is reused; a drawn floor plan is never overwritten', async () => {
