@@ -10,6 +10,7 @@ import type { PhonePlatform } from './screenLayout';
 import { readLookToEdit } from './phoneEditLock';
 import type { AppleAvailabilityStatus } from '../ai/appleAI';
 import type { PhoneCamera } from './phoneCamera';
+import type { ArrivalGate } from './boardGlow';
 
 export interface PhoneRouteBadgeInput {
   appleReady: boolean;
@@ -37,9 +38,11 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 }
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings'> & { omitted?: { drawings?: number } },
-  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number }) => void,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardSend'> & { omitted?: { drawings?: number } },
+  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; arrived?: boolean }) => void,
   platform?: PhonePlatform,
+  /** Phone: lights the board only for a real new send (boardGlow.ts). */
+  arrival?: { gate: ArrivalGate; now: () => number },
 ): boolean {
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
@@ -47,7 +50,9 @@ export function applyGuestSnapshot(
   // The board's current plan drawings ride with it (the phone re-checks them).
   // A drawing left out (too big for the relay) is said on the phone.
   const omitted = snap.omitted?.drawings ?? 0;
-  if (omitted > 0) showBoard(snap.board, snap.boardDrawings ?? {}, { drawingsOmitted: omitted });
+  const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now());
+  const info = { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), ...(arrived ? { arrived } : {}) };
+  if (Object.keys(info).length) showBoard(snap.board, snap.boardDrawings ?? {}, info);
   else showBoard(snap.board, snap.boardDrawings ?? {});
   return true;
 }
