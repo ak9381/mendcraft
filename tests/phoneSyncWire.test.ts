@@ -40,7 +40,7 @@ describe('session: resume the same room token', () => {
     const t = createFakeTransport();
     const host = await createHostSession(t, undefined, { token: TOKEN });
     expect(host.token).toBe(TOKEN);
-    expect(host.code).toBe(TOKEN.slice(0, 8));
+    expect(host.code).not.toBe(TOKEN.slice(0, 8)); // the code is its own secret (C2)
     await host.close();
   });
   it('ignores a malformed resume token and mints a fresh one', async () => {
@@ -144,5 +144,45 @@ describe('session: guests receive host state snapshots', () => {
     await flush(); await flush();
     expect(metas.at(-1)).toEqual([{ id: 's1', at: 1000, replay: true }, null]);
     await Promise.all([guest.close(), other.close(), dash.close(), host.close()]);
+  });
+});
+
+describe('R3: a replay never puts an older board back', () => {
+  const snap = (rev: number): ControlSnapshot => buildControlSnapshot({ rev });
+  it('a hello during a live send re-sends the newest board, and later hellos keep it', async () => {
+    const base = createFakeTransport();
+    // State publishes can be held (an ack still in flight) and released by hand.
+    let hold = false;
+    const held: Array<() => void> = [];
+    const t: typeof base = {
+      ...base,
+      async publish(room, msg) {
+        if (hold && msg.type === 'state') await new Promise<void>((r) => held.push(r));
+        return base.publish(room, msg);
+      },
+    };
+    const host = await createHostSession(t, undefined, { token: TOKEN });
+    const guest = await createGuestSession(base, TOKEN);
+    await flush();
+    const seen: number[] = [];
+    guest.onSnapshot((s) => seen.push(s.rev));
+    await host.publishState(snap(1));
+    await flush();
+    // The live send of rev 2 is in flight when another phone says hello.
+    hold = true;
+    const live = host.publishState(snap(2));
+    const other = await createGuestSession(base, TOKEN);
+    await flush(); await flush();
+    hold = false;
+    // The live send lands first, then the replay: the replay must not be rev 1.
+    while (held.length) { held.shift()!(); await flush(); }
+    await live; await flush(); await flush();
+    expect(seen.at(-1)).toBe(2);
+    expect(seen.slice(seen.indexOf(2))).not.toContain(1);
+    // A later hello still replays rev 2.
+    const third = await createGuestSession(base, TOKEN);
+    await flush(); await flush();
+    expect(seen.at(-1)).toBe(2);
+    await Promise.all([guest.close(), other.close(), third.close(), host.close()]);
   });
 });

@@ -13,7 +13,7 @@ import {
   normalizeCode,
   pairStateLabel,
   parseJoinInput,
-  shortCodeOf,
+  generatePairCode,
   validateCommand,
   validateMessage,
   validateMusic,
@@ -22,7 +22,7 @@ import {
   type RelayMessage,
 } from '../src/relay/protocol';
 import { createFakeTransport } from '../src/relay/transport';
-import { ALIAS_TTL_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
+import { ALIAS_TTL_MS, RELAY_STEP_TIMEOUT_MS, PRIVACY_ASK_MAX, PRIVACY_ASK_WINDOW_MS, createGuestSession, createHostSession, resolveRoomId } from '../src/relay/session';
 
 const seqRandom =
   (start = 0): RandomBytes =>
@@ -45,10 +45,11 @@ describe('relay tokens, codes, and URLs', () => {
     expect(generateRoomToken(seqRandom(7))).not.toBe(generateRoomToken(seqRandom()));
   });
 
-  it('derives and groups the short code', () => {
-    const token = generateRoomToken(seqRandom());
-    const code = shortCodeOf(token);
-    expect(code).toBe(token.slice(0, CODE_LENGTH));
+  it('makes a short code of its own (never derived from a token) and groups it', () => {
+    const code = generatePairCode(seqRandom(3));
+    expect(code).toHaveLength(CODE_LENGTH);
+    expect([...code].every((c) => TOKEN_ALPHABET.includes(c))).toBe(true);
+    expect(generatePairCode()).not.toBe(generatePairCode());
     expect(groupCode(code)).toBe(`${code.slice(0, 4)}-${code.slice(4)}`);
   });
 
@@ -282,12 +283,46 @@ describe('host session short-code alias TTL', () => {
   });
 });
 
+describe('C2: the pairing code is a short-lived secret of its own', () => {
+  it('is not the token prefix, and a resumed room gets a new code every time', async () => {
+    const t = createFakeTransport();
+    const token = generateRoomToken(seqRandom());
+    const a = await createHostSession(t, seqRandom(), { token });
+    expect(a.code).not.toBe(token.slice(0, CODE_LENGTH));
+    await a.close();
+    const b = await createHostSession(t, seqRandom(), { token });
+    expect(b.token).toBe(token);
+    expect(b.code).not.toBe(a.code);
+    expect(await t.resolveAlias(a.code)).toBeNull(); // the old code is gone
+    expect(await t.resolveAlias(b.code)).toBe(token);
+    await b.close();
+    expect(await t.resolveAlias(b.code)).toBeNull();
+  });
+
+  it('re-opening admission after the code was retired mints a NEW code; the old one stays dead', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const first = host.code;
+    await host.endAdmission();
+    expect(await t.resolveAlias(first)).toBeNull();
+    await host.admitMore();
+    expect(host.code).not.toBe(first);
+    expect(await t.resolveAlias(first)).toBeNull();
+    expect(await t.resolveAlias(host.code)).toBe(host.token);
+    // Re-opening while the code is still open keeps it (the card already shows it).
+    const open = host.code;
+    await host.admitMore();
+    expect(host.code).toBe(open);
+    await host.close();
+  });
+});
+
 describe('host + guest sessions over the fake transport', () => {
   it('pairs, exchanges commands and frames, and parts', async () => {
     const t = createFakeTransport();
     const host = await createHostSession(t, seqRandom());
     expect(host.state()).toBe('waiting');
-    expect(host.code).toBe(shortCodeOf(host.token));
+    expect(host.code).not.toBe(host.token.slice(0, CODE_LENGTH)); // its own secret
     expect(await t.resolveAlias(host.code)).toBe(host.token);
 
     const hostStates: PairState[] = [];
@@ -439,3 +474,95 @@ describe('privacyAsk / privacyReply on the wire', () => {
     await host.close();
   });
 });
+
+describe('I5: privacyAsk needs a paired phone, once per job, rate-limited, never from history', () => {
+  it('an ask with no phone in the room (no hello) never reaches the hub', async () => {
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom());
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    await flush();
+    await t.publish(host.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'x1', text: 'spend quota' } });
+    await flush();
+    expect(asks).toEqual([]);
+    await host.close();
+  });
+
+  it('a paired phone is heard once per jobId, and at most PRIVACY_ASK_MAX per window', async () => {
+    let clock = 1_000_000;
+    const t = createFakeTransport();
+    const host = await createHostSession(t, seqRandom(), { now: () => clock });
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    const guest = await createGuestSession(t, host.token);
+    await flush();
+    const send = (jobId: string) => t.publish(host.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId, text: 'email Priya' } });
+    await send('j1'); await send('j1'); await flush();
+    expect(asks).toEqual(['j1']);
+    for (let i = 2; i <= PRIVACY_ASK_MAX + 3; i++) await send(`j${i}`);
+    await flush();
+    expect(asks).toHaveLength(PRIVACY_ASK_MAX);
+    clock += PRIVACY_ASK_WINDOW_MS + 1;
+    await send('later'); await flush();
+    expect(asks.at(-1)).toBe('later');
+    await guest.close();
+    await host.close();
+  });
+
+  it("an ask older than the laptop's session (the room's history) never acts", async () => {
+    // A room that keeps its history and replays it to every new listener (as Firestore does).
+    const base = createFakeTransport();
+    const log: Array<{ room: string; msg: RelayMessage; at: number }> = [];
+    let clock = 0;
+    const t: typeof base = {
+      ...base,
+      async publish(room, msg) { await this.publishStamped!(room, msg); },
+      async publishStamped(room, msg) { const at = ++clock; log.push({ room, msg, at }); await base.publish(room, msg); return { at }; },
+      subscribe(room, onMsg, onError, since) {
+        const off = base.subscribe(room, (m) => onMsg(m, { at: clock }), onError, since);
+        for (const h of log.filter((e) => e.room === room)) onMsg(h.msg, { at: h.at });
+        return off;
+      },
+    };
+    const old = await createHostSession(t, seqRandom());
+    const guest = await createGuestSession(t, old.token);
+    await flush();
+    await t.publish(old.token, { v: 1, from: 'phone', type: 'privacyAsk', ask: { jobId: 'old-1', text: 'email Priya' } });
+    await flush();
+    await old.close({ silent: true } as never);
+    // A laptop reload: a new session on the same room. The old ask is history.
+    const host = await createHostSession(t, seqRandom(), { token: old.token });
+    const asks: string[] = [];
+    host.onPrivacyAsk((a) => asks.push(a.jobId));
+    await flush();
+    expect(asks).toEqual([]);
+    await guest.close();
+    await host.close();
+  });
+});
+
+describe('M5: opening or joining a room never hangs', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const never = () => new Promise<never>(() => undefined);
+
+  it('a host whose code never gets written gives up (the canvas says it needs network)', async () => {
+    const base = createFakeTransport();
+    const t = { ...base, setAlias: never };
+    const p = createHostSession(t, seqRandom());
+    const caught = p.then(() => 'opened', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(RELAY_STEP_TIMEOUT_MS + 10);
+    expect(await caught).toMatch(/no answer/);
+  });
+
+  it("a phone whose hello is never stored gives up; a code that never resolves too", async () => {
+    const base = createFakeTransport();
+    const t = { ...base, publish: never, publishStamped: never, resolveAlias: never };
+    const joined = createGuestSession(t, 'ABCDEFGHJKMNPQRSTVWXYZ01').then(() => 'joined', (e: Error) => e.message);
+    const resolved = resolveRoomId(t, { kind: 'code', code: 'ABCDEFGH' }).then((r) => r, (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(RELAY_STEP_TIMEOUT_MS + 10);
+    expect(await joined).toMatch(/no answer/);
+    expect(await resolved).toMatch(/no answer/);
+  });
+});
+
