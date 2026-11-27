@@ -9,7 +9,7 @@ camera only if you turn on Hands, and for the microphone only if you speak.
 - Desktop **Google Chrome**, current stable version (check `chrome://version`),
   on a computer that meets Chrome's hardware requirements for built-in AI.
 - To use **Gemini Nano** on the device:
-  1. Open `chrome://flags`, search for **"Gemma 4 for Built-in AI"**, set it to
+  1. Open `chrome://flags`, search for the Built-in AI / Gemini Nano flag (named **"Gemma 4 for Built-in AI"** in current Chrome per the contest rules), set it to
      **Enabled**, and relaunch Chrome.
   2. Open https://mendcraft.web.app. Chrome may need to download the model
      first. That can take a while, and the canvas does not wait for it.
@@ -50,7 +50,7 @@ result opens a review card. Nothing changes until you press **Approve** (or
 | 6 | `add Kannada` | Gemini writes a Kannada pack. The review shows the labels; anything that stays English is listed. Approve: the bar turns Kannada. `undo` goes back to English. |
 | 7 | `set the lamp to 500 percent` | **Needs a connected lamp.** With one: "Lamps go from 10 to 100 %. Nothing changed." This is a fixed rule, and no model is asked. With no lamp there is nothing to act on, so the line is not a device command. |
 | 8 | **More → Demo → Simulate offline** | The button reads "Offline (simulated)" and the Gemini card says **Offline**. Now `build the dashboard` is drafted by Nano alone ("Offline · Quick only. Deep will improve it when you're back online."). `draw the floor plan` replies "Drawing a floor plan needs Gemini, and you are offline. Nothing was generated." Click the button again to go back online. |
-| 9 | **Real offline + reload** | Load the page twice while online, then turn Wi-Fi off and reload. Your approved boards and the Kannada pack come back from the device, and the Gemini card says Offline. This depends on Chrome having cached the page. Our automated test covers it against a local server, but we have not confirmed it on the live site. Offline, type: voice needs the network. |
+| 9 | **Real offline** | Offline reload of the live site is not supported yet; offline, the open page keeps your approved boards and Nano still drafts. Offline, type: voice needs the network. |
 | 10 | `show artifacts` | Every approved board, plan, connector and pack, with who made it ("Gemini · cloud", "Gemini Nano · on device", "You") and Remove / Export / Import. |
 
 Optional: **More → Hands** turns on the camera. Then "Palm to point · fist to
@@ -68,7 +68,7 @@ on the empty canvas locks control to your face and hands. If you look away, a
 | Gimbal nod on Approve | iPhone app + a DockKit stand | Nothing moves. |
 
 The video shows these with real hardware. To see the whole journey (lamp,
-phones, connector, offline reload, refusal) without hardware, run the
+phones, connector, a reload with every outside host blocked, refusal) without hardware, run the
 automated test from the repo: `npm install`, `npx vite`, then `npm run e2e`.
 It uses recorded model replies and simulated devices, and labels them SIM and
 Replay.

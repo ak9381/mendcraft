@@ -28,7 +28,7 @@ typing, read aloud, her language, an owner lock so only her registered hands
 control it, and a pause when she looks away.
 
 **Privacy:** hand and face tracking run in the browser. Device IDs and
-addresses stay on the laptop. A counter shows every byte sent to Gemini.
+addresses stay on the laptop. A counter shows every byte this laptop's canvas sends to Gemini (a pointed camera crop counts at its size each time it is sent).
 Offline, her approved boards stay and Nano still drafts.
 
 ## How we built it
@@ -71,8 +71,8 @@ stand when she approves.
 - One request, one review: a Nano draft improved by Gemini, with a byte count.
 - Gemini writes the lamp's protocol once. After she approves it, the lamp runs
   on it without asking Gemini again.
-- An end-to-end test runs the whole journey in Chrome, including an offline
-  reload and a tampered stored artifact.
+- An end-to-end test runs the whole journey in Chrome, including a reload with
+  every outside host blocked and a tampered stored artifact.
 
 ## What we learned
 
@@ -93,5 +93,5 @@ built during the submission period. No public users yet.
 
 **Disclosure:** in the iOS app, the on-device step can call Apple Foundation
 Models directly, not through Firebase AI Logic. That path is untested, and the
-web app and the demo do not use it. Voice input uses Chrome's speech
+web app and the demo do not use it. A paired phone without on-device AI calls Gemini (through Firebase AI Logic) directly from the phone; those bytes show per phone in the AI monitor, not in the laptop's counter, and this path is untested. On Android the on-device step only checks status and falls through to Gemini. Voice input uses Chrome's speech
 recognition, which needs the network.

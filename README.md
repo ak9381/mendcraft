@@ -9,8 +9,7 @@ one canvas in Chrome and say what you need: "build the dashboard", "draw the
 floor plan", "add Kannada". Gemini Nano works on the laptop through Firebase AI
 Logic, and Gemini in the cloud does the heavier work. Every board, lamp
 connector, floor plan and language pack comes back as a proposal you review.
-Nothing changes until you press Approve, and a counter shows every byte sent to
-Gemini.
+Nothing changes until you press Approve. A counter shows every byte this laptop's canvas sends to Gemini (a pointed camera crop counts at its size each time it is sent).
 
 **Live demo:** https://mendcraft.web.app (desktop Chrome; see
 [docs/submission/TESTING.md](docs/submission/TESTING.md)). Built for Google
@@ -92,8 +91,8 @@ example `intent` at [#L1327](src/ai/hybrid.ts#L1327) and `handAdapt` at
   by fixed rules, not a model
   ([src/canvas/aiTurn.ts#L121-L164](src/canvas/aiTurn.ts#L121-L164),
   [src/ai/redact.ts](src/ai/redact.ts)).
-- **Bytes ledger.** The engine bar shows "N B sent to cloud": every byte sent to
-  Gemini, counted on the real request. Each review card shows its own receipt,
+- **Bytes ledger.** The engine bar shows "N B sent to cloud". A counter shows every byte this laptop's canvas sends to Gemini (a pointed camera crop counts at its size each time it is sent). Bytes are
+  counted on the real request. Each review card shows its own receipt,
   for example "Drafted by Nano on this device · 0 B; improved by Gemini · 2.1 KB"
   ([src/canvas/engineBar.ts](src/canvas/engineBar.ts),
   [src/canvas/reviewDialog.ts#L124-L132](src/canvas/reviewDialog.ts#L124-L132)).
@@ -185,8 +184,9 @@ npm run a11y:axe
 ```
 
 `npm run e2e` replays model replies from `tests/fixtures/`. The page does not
-script them. The test checks every review, the lamp refusal, an offline reload
-that stays in Kannada, a tampered stored artifact, and export/import.
+script them. The test checks every review, the lamp refusal, a reload with every
+outside host blocked (the local server still serves the page) that stays in
+Kannada, a tampered stored artifact, and export/import.
 
 ---
 
@@ -197,10 +197,10 @@ that stays in Kannada, a tampered stored artifact, and export/import.
   available here").
 - **Voice needs the network.** Chrome's speech recognition does not work
   offline. Offline, type the command.
-- **Offline reload.** Approved artifacts live in IndexedDB, but the page itself
-  and the MediaPipe files come from the network or the browser cache. We test
-  the offline reload against a local server (`npm run e2e`). On the live site,
-  load the page while online first.
+- **Offline reload.** Offline reload does not work on the live site yet.
+  Approved artifacts stay in IndexedDB and come back once the page loads.
+  `npm run e2e` tests a reload with every outside host blocked (the local
+  server still serves the page).
 - **iPhone on-device AI is not Firebase AI Logic, and it is untested.** In the
   iOS shell, the "Nano" step can call Apple Foundation Models directly through
   our Capacitor plugin
@@ -210,8 +210,7 @@ that stays in Kannada, a tampered stored artifact, and export/import.
   written against was removed, so it calls Apple's framework directly. We have
   not run this path on a device. The web app and the demo do not use it.
 - **Phones are companions.** `npm run e2e` covers pairing and sending a board
-  to SIM phones. We have not tested AI requests made on the phones themselves,
-  and no automated test covers the real gimbal.
+  to SIM phones. No automated test covers the real gimbal. A paired phone without on-device AI calls Gemini (through Firebase AI Logic) directly from the phone; those bytes show per phone in the AI monitor, not in the laptop's counter, and this path is untested. On Android the on-device step only checks status and falls through to Gemini.
 - **Real devices.** The lamp needs a WiZ bulb and the local bridge. The speaker
   needs Spotify Premium. Without them those tiles say what is missing; they do
   not fake a connection.
