@@ -966,15 +966,18 @@
    The viewport edge lights up as a tile nears the side where a phone is paired
    (see setEdgeGlow in canvasApp). The arrangement strip remembers which phone
    is on which side. */
+/* A clear, bright green band — the muted accent on a 24 px fade was nearly
+   invisible on the cream canvas (live test, 27 Nov). Drawn above boards. */
 .mc-viewport::before,
 .mc-viewport::after {
-  content: ''; position: absolute; top: 0; bottom: 0; width: 24px;
-  pointer-events: none; opacity: 0; transition: opacity 120ms ease; z-index: 30;
+  content: ''; position: absolute; top: 0; bottom: 0; width: 64px;
+  pointer-events: none; opacity: 0; transition: opacity 120ms ease; z-index: 60;
 }
-.mc-viewport::before { left: 0; background: linear-gradient(to right, var(--accent), transparent); }
-.mc-viewport::after { right: 0; background: linear-gradient(to left, var(--accent), transparent); }
-.mc-viewport.mc-edge-glow-left::before { opacity: 0.85; }
-.mc-viewport.mc-edge-glow-right::after { opacity: 0.85; }
+.mc-viewport::before { left: 0; background: linear-gradient(to right, rgba(34, 170, 90, 0.95), rgba(34, 170, 90, 0.35) 55%, transparent); box-shadow: inset 6px 0 0 #22AA5A; }
+.mc-viewport::after { right: 0; background: linear-gradient(to left, rgba(34, 170, 90, 0.95), rgba(34, 170, 90, 0.35) 55%, transparent); box-shadow: inset -6px 0 0 #22AA5A; }
+.mc-viewport.mc-edge-glow-left::before { opacity: 1; }
+.mc-viewport.mc-edge-glow-right::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .mc-viewport::before, .mc-viewport::after { transition: none; } }
 
 .mc-arrange {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px;
