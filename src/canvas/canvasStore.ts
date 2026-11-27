@@ -15,7 +15,9 @@
 //    first copy is kept for good; later ones rotate);
 //  - ?fresh=1 starts blank only after the saved layout is copied aside (the
 //    first copy is kept for good; later ones rotate).
-import { coerceLayoutReport, LAYOUT_KEY, type CanvasLayout } from './canvasPersistence';
+import { coerceLayoutReport, LAYOUT_KEY, splitCanvasDoc, type CanvasLayout } from './canvasPersistence';
+import type { CanvasDoc } from './frames';
+import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import { isDevicesPlan } from './connectedDevices';
 import type { SurfacePlan } from './surfacePlan';
 
@@ -147,4 +149,56 @@ export function openFresh(storage: Store | null, href: string): { fresh: boolean
   if (url === null) return { fresh: false, url: null };
   if (!storage) return { fresh: true, url };
   return { fresh: startFresh(storage, CANVAS_STORAGE_KEY, [DEVICES_BOARD_KEY]), url };
+}
+
+/** Said once when the artifact store could not be read: nothing this session
+ *  is written to it (or to the layout), so an unread board is never overwritten. */
+export const STORE_SAVE_OFF_LINE = 'Changes in this session won’t be saved.';
+
+export interface SaveTargets {
+  layoutStorage: Pick<Storage, 'setItem'> | null;
+  store: { put(a: Artifact): Promise<void>; remove(id: string): Promise<void> };
+  /** The saved layout couldn't be read or copied aside: never write it. */
+  layoutBlocked: boolean;
+  /** The store couldn't be read: what it holds is unknown, so nothing is
+   *  written to it (and the layout, which points at it, is left as it was). */
+  storeBlocked: boolean;
+}
+
+/** One save of the canvas document: the layout, then the changed artifacts
+ *  (without waiting). Returns the artifacts as the session now knows them. */
+export function saveCanvasDoc(doc: CanvasDoc, artifacts: Artifact[], by: (id: string) => ArtifactBy, now: number, keep: ReadonlySet<string>, t: SaveTargets): Artifact[] {
+  if (t.storeBlocked) return artifacts;
+  const out = splitCanvasDoc(doc, artifacts, by, now, keep);
+  // A full localStorage (quota) must not stop the artifacts being kept.
+  try { if (!t.layoutBlocked) t.layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
+  const gone = new Set(out.remove);
+  const put = new Map(out.put.map((a) => [a.id, a]));
+  for (const a of out.put) void t.store.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
+  for (const id of out.remove) void t.store.remove(id).catch(() => undefined);
+  return [...artifacts.filter((a) => !gone.has(a.id) && !put.has(a.id)), ...put.values()];
+}
+
+/** Frame ids new boards must never take: every stored board or drawing the
+ *  canvas does not show — and, when the store could not be read, every
+ *  frame of the layout (its boards may be stored under those ids). */
+export function reservedIds(o: { keepIds: Iterable<string>; loaded: readonly Artifact[]; readFailed: boolean; layout: CanvasLayout | null }): string[] {
+  const keep = new Set(o.keepIds);
+  const ids = new Set<string>();
+  for (const id of keep) { const f = frameIdOfArtifactId(id); if (f) ids.add(f); }
+  for (const a of o.loaded) if (keep.has(a.id) && a.kind === 'plan') { const f = (a.data as { frameId?: unknown }).frameId; if (typeof f === 'string') ids.add(f); }
+  if (o.readFailed) for (const f of o.layout?.frames ?? []) ids.add(f.id);
+  return [...ids];
+}
+
+/** Where a test build's ?fresh keeps the stored artifacts it clears. */
+export const BEFORE_FRESH_ARTIFACTS_KEY = `${LAYOUT_KEY}.beforeFresh.artifacts`;
+/** Test build ?fresh: copy every stored artifact aside (first copy kept for
+ *  good, later ones rotate), then clear the store. A failed read or copy
+ *  clears nothing (false). An empty store needs no copy. */
+export async function clearStoreForFresh(store: { list(): Promise<unknown[]>; clear(): Promise<void> }, storage: Store | null): Promise<boolean> {
+  let rows: unknown[];
+  try { rows = await store.list(); } catch { return false; }
+  if (rows.length && (!storage || !keepRotating(storage, BEFORE_FRESH_ARTIFACTS_KEY, JSON.stringify(rows)))) return false;
+  try { await store.clear(); return true; } catch { return false; }
 }

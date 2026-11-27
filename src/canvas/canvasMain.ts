@@ -24,11 +24,11 @@ import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
 import { createReplayEngines, fixtureDevices } from './replayEngine';
-import { joinCanvasDoc, LAYOUT_KEY, splitCanvasDoc, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
+import { joinCanvasDoc, LAYOUT_KEY, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
-import { loadLayout, loadLine, openFresh } from './canvasStore';
+import { clearStoreForFresh, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, STORE_SAVE_OFF_LINE } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 
 const params = new URLSearchParams(location.search);
@@ -49,7 +49,8 @@ const layoutStorage = (() => { try { return localStorage; } catch { return null;
 const freshOpen = openFresh(layoutStorage, location.href);
 if (freshOpen.url) { try { history.replaceState(history.state, '', freshOpen.url); } catch { /* keep the address */ } }
 const { store: artifactStore, persistent } = await openArtifactStore();
-if (freshOpen.fresh && testBuild) await artifactStore.clear().catch(() => undefined);
+// A test build's ?fresh also empties the store — after copying it aside.
+if (freshOpen.fresh && testBuild && !(await clearStoreForFresh(artifactStore, layoutStorage))) console.warn('[mendcraft] ?fresh: stored boards could not be copied aside, so they were kept.');
 const loaded = await loadArtifacts(artifactStore);
 let artifacts: Artifact[] = loaded.ok;
 // A layout this build can't read is copied aside before anything can write;
@@ -67,7 +68,7 @@ if (keepIds.size) console.warn(`[mendcraft] ${keepIds.size} stored item(s) not o
 const storeNotes = [
   loadLine(layoutLoad) ?? '',
   persistent ? '' : STORE_FALLBACK_LINE,
-  loaded.readFailed ? STORE_READ_FAILED_LINE : '',
+  loaded.readFailed ? `${STORE_READ_FAILED_LINE} ${STORE_SAVE_OFF_LINE}` : '',
   loaded.overCap.length ? overCapLine(loaded.overCap.length) : '',
   joinDropped.length ? tooManyBoardsLine(joinDropped.length) : '',
   !startDoc && keepIds.size > 0 ? "Stored boards couldn't be opened together. Nothing stored was changed." : '',
@@ -225,13 +226,9 @@ const phoneCamera = phoneHandsAllowed(phoneShell, phonePlatform)
 // The iPhone's live guest session (null while not joined): it answers the
 // laptop's point request and re-announces its sensing status.
 let guestSession: PhoneGuestSessionLike | null = null;
-/** Frame ids of every stored board or drawing the canvas does not show
- *  (kept, over the cap, or past the store limit): new boards never take them. */
+/** Frame ids new boards never take (canvasStore.reservedIds). */
 function reservedFrameIds(): string[] {
-  const ids = new Set<string>();
-  for (const id of keepIds) { const f = frameIdOfArtifactId(id); if (f) ids.add(f); }
-  for (const a of loaded.ok) if (keepIds.has(a.id) && a.kind === 'plan') { const f = (a.data as { frameId?: unknown }).frameId; if (typeof f === 'string') ids.add(f); }
-  return [...ids];
+  return reservedIds({ keepIds, loaded: loaded.ok, readFailed: !!loaded.readFailed, layout });
 }
 /** Who made what an artifact shows now. A board this phone received keeps
  *  the laptop's maker until she edits it here. Then this session's own
@@ -261,18 +258,13 @@ function boardMaker(frameId: string): ArtifactBy | undefined {
   const touched = !!handle?.receivedBy(frameId) || !!handle?.makerOf(id) || !!stored;
   return touched ? artifactMaker(id) : undefined;
 }
-/** Every save: the layout now, the changed artifacts without waiting. */
+/** Every save: the layout now, the changed artifacts without waiting.
+ *  Nothing is written when the store couldn't be read (an unread board must
+ *  never be overwritten), nor the layout when it couldn't be kept safe. */
 function persistDoc(doc: CanvasDoc): void {
-  const out = splitCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds);
-  // A full localStorage (quota) must not stop the artifacts being kept.
-  // A saved layout this build couldn't read AND couldn't copy aside is never
-  // written over (this session's layout just isn't saved).
-  try { if (!layoutSaveBlocked) layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
-  const gone = new Set(out.remove);
-  const put = new Map(out.put.map((a) => [a.id, a]));
-  artifacts = [...artifacts.filter((a) => !gone.has(a.id) && !put.has(a.id)), ...put.values()];
-  for (const a of out.put) void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
-  for (const id of out.remove) void artifactStore.remove(id).catch(() => undefined);
+  artifacts = saveCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds, {
+    layoutStorage, store: artifactStore, layoutBlocked: layoutSaveBlocked, storeBlocked: !!loaded.readFailed,
+  });
 }
 
 handle = mountCanvas(root, {

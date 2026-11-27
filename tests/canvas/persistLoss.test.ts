@@ -11,7 +11,7 @@ import { coerceLayout } from '../../src/canvas/canvasPersistence';
 import {
   BEFORE_FRESH_KEY, CANVAS_STORAGE_KEY, DEVICES_BOARD_KEY, FRESH_SLOTS, MAX_UNREADABLE, REPAIR_SLOTS,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
-  keepUnreadable, loadLayout, loadLine, openFresh, resolveDevicesBoard, startFresh, withoutFresh,
+  BEFORE_FRESH_ARTIFACTS_KEY, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, resolveDevicesBoard, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
 } from '../../src/canvas/canvasStore';
 import { connectedDevicesPlan, isDevicesPlan } from '../../src/canvas/connectedDevices';
 
@@ -171,5 +171,63 @@ describe('the devices-board marker is trusted only on the devices list', () => {
     expect(resolveDevicesBoard({ f1: devices }, 'f9')).toBeNull();
     expect(resolveDevicesBoard({ f1: devices }, null)).toBeNull();
     expect(resolveDevicesBoard(null, 'f1')).toBeNull();
+  });
+});
+
+describe('a store that could not be read is never written over', () => {
+  const rect = { x: 0, y: 0, w: 1000, h: 680 };
+  const layout = { version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1', frames: [{ id: 'f1', kind: 'room' as const, title: 'Desk', rect, pinned: false }] };
+  // What the canvas opens when the read failed: the layout's frames, empty.
+  const doc = { version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1', frames: layout.frames, surfaces: { f1: { kind: 'plan' as const, title: 'Floor plan', tiles: [{ type: 'plan' as const, boardId: 'f1-cad', template: 'blank' as const }] } } };
+  const targets = (storeBlocked: boolean) => {
+    const puts: string[] = []; const removes: string[] = []; const layoutWrites: string[] = [];
+    return { puts, removes, layoutWrites, t: {
+      layoutStorage: { setItem: (_k: string, v: string) => { layoutWrites.push(v); } },
+      store: { put: async (a: { id: string }) => { puts.push(a.id); }, remove: async (id: string) => { removes.push(id); } },
+      layoutBlocked: false, storeBlocked,
+    } };
+  };
+  it('read failed: an edit (a plan on the "empty" board) puts, removes and lays out nothing', () => {
+    const x = targets(true);
+    const out = saveCanvasDoc(doc as never, [], () => 'person', 1, new Set(), x.t);
+    expect(out).toEqual([]);
+    expect([x.puts, x.removes, x.layoutWrites]).toEqual([[], [], []]);
+    expect(STORE_SAVE_OFF_LINE).toBe('Changes in this session won’t be saved.');
+  });
+  it('read fine: the same save writes the board and the layout', () => {
+    const x = targets(false);
+    saveCanvasDoc(doc as never, [], () => 'person', 1, new Set(), x.t);
+    expect(x.puts).toEqual(['board-f1']);
+    expect(x.layoutWrites).toHaveLength(1);
+  });
+  it('read failed: every layout frame id is reserved, so no new board takes an unread board’s id', () => {
+    expect(reservedIds({ keepIds: [], loaded: [], readFailed: true, layout: coerceLayout(layout) }).sort()).toEqual(['f1']);
+    expect(reservedIds({ keepIds: [], loaded: [], readFailed: false, layout: coerceLayout(layout) })).toEqual([]);
+    expect(reservedIds({ keepIds: ['board-f7'], loaded: [], readFailed: false, layout: null })).toEqual(['f7']);
+  });
+});
+
+describe('a test build’s ?fresh copies the stored artifacts aside before clearing them', () => {
+  const rows = [{ id: 'board-f1', kind: 'board' }];
+  const store = (list: () => Promise<unknown[]>) => { const s = { cleared: false, list, clear: async () => { s.cleared = true; } }; return s; };
+  it('copies, then clears; the first copy is kept for good', async () => {
+    const st = memStorage();
+    const a = store(async () => rows);
+    expect(await clearStoreForFresh(a, st)).toBe(true);
+    expect(a.cleared).toBe(true);
+    expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual(rows);
+    const b = store(async () => [{ id: 'board-f2' }]);
+    await clearStoreForFresh(b, st);
+    expect(JSON.parse(st.getItem(BEFORE_FRESH_ARTIFACTS_KEY)!)).toEqual(rows);
+    expect(JSON.parse(st.getItem(`${BEFORE_FRESH_ARTIFACTS_KEY}.2`)!)).toEqual([{ id: 'board-f2' }]);
+  });
+  it('a failed read or copy clears nothing', async () => {
+    const a = store(async () => { throw new Error('blocked'); });
+    expect(await clearStoreForFresh(a, memStorage())).toBe(false);
+    expect(a.cleared).toBe(false);
+    const full = memStorage(); full.setItem = () => { throw new Error('QuotaExceededError'); };
+    const b = store(async () => rows);
+    expect(await clearStoreForFresh(b, full)).toBe(false);
+    expect(b.cleared).toBe(false);
   });
 });

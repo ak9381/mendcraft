@@ -787,27 +787,44 @@ async function phonelayout(page) {
 }
 SECTIONS.phonelayout = phonelayout;
 
-// ---- persist: ?fresh keeps a copy of the saved layout and leaves the address; an unreadable layout is kept safe ----
+// ---- persist: a board with content survives reloads; ?fresh keeps a copy of the layout and the store and leaves the address; an unreadable layout is kept safe and said once ----
+const UNREADABLE_LINE_E2E = 'Couldn’t open your saved boards — they’re kept safe.';
 async function persist(page) {
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check(await page.evaluate(() => !new URLSearchParams(location.search).has('fresh') && new URLSearchParams(location.search).get('sim') === '1'), '?fresh leaves the address bar (the rest stays)');
+  // A board WITH content in IndexedDB.
+  await page.evaluate((a) => window.__mcArtifacts.put(a), VALID_BOARD);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  const desk = () => { const s = window.__mcCanvas.snapshot(); const f = s.frames.find((x) => x.title === 'Desk'); return f ? (s.surfaces[f.id]?.tiles ?? []).length : -1; };
+  check((await page.evaluate(desk)) === 1, 'the stored board opens with its content');
   await page.evaluate(() => window.__mcCanvas.run('new board'));
   await sleep(1200); // past the save debounce
   const saved = await page.evaluate(() => localStorage.getItem('mc.canvas.v1'));
-  check(!!saved && JSON.parse(saved).frames.length === 1, 'the new board is in the saved layout');
+  check(!!saved && JSON.parse(saved).frames.length === 2, 'both boards are in the saved layout');
   if (!(await open(page, 'sim=1&hands=0'))) return;
-  check((await frames(page)).length === 1, 'a reload without fresh opens what was built');
+  check((await frames(page)).length === 2 && (await page.evaluate(desk)) === 1, 'a reload without fresh opens both boards, the stored one with its content');
+  const storedRow = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.find((a) => a.id === 'board-f1') ?? null));
+  check(!!storedRow && storedRow.data.plan.tiles.length === 1, 'the stored board is unchanged in the store after reloads');
+  // ?fresh: blank, but the layout AND the stored board are copied aside first.
   if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
   check((await frames(page)).length === 0, 'a second ?fresh starts blank');
   check(await page.evaluate((s) => localStorage.getItem('mc.canvas.v1.beforeFresh') === s, saved), 'the layout before it is kept under beforeFresh');
+  const keptRows = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1.beforeFresh.artifacts') ?? 'null'); } catch { return null; } });
+  check(Array.isArray(keptRows) && keptRows.some((a) => a.id === 'board-f1' && a.data?.plan?.tiles?.length === 1), 'the stored board, with its content, is kept under beforeFresh.artifacts');
   // A layout this build cannot read: copied aside, said once, never overwritten.
   await page.evaluate(() => localStorage.setItem('mc.canvas.v1', '{"version":99,"frames":"broken"}'));
   if (!(await open(page, 'sim=1&hands=0'))) return;
-  await waitFor(page, () => document.body.innerText.includes('Couldn’t open your saved boards — they’re kept safe.'), 5_000, 'the unreadable line is said')
+  await waitFor(page, (line) => document.body.innerText.includes(line), 5_000, 'the unreadable line is said', UNREADABLE_LINE_E2E)
     .then((ok) => ok && check(true, 'the unreadable line is said'));
   await page.evaluate(() => window.__mcCanvas.run('new board'));
   await sleep(1200);
+  const saidOnce = await page.evaluate((line) => window.__mcCanvas.statusSince(0).filter((l) => l.includes(line)).length, UNREADABLE_LINE_E2E);
+  check(saidOnce === 1, `the unreadable line is said once (got ${saidOnce})`);
   check(await page.evaluate(() => localStorage.getItem('mc.canvas.v1.unreadable') === '{"version":99,"frames":"broken"}'), 'the unreadable layout is kept under .unreadable after a save');
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await sleep(800);
+  const again = await page.evaluate((line) => window.__mcCanvas.statusSince(0).filter((l) => l.includes(line)).length, UNREADABLE_LINE_E2E);
+  check(again === 0, `after the save, a reload does not say it again (got ${again})`);
 }
 SECTIONS.persist = persist;
 
