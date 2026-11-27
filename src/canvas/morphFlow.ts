@@ -11,6 +11,7 @@
 // cancel mid-call discards the reply via a generation counter (nothing is
 // ever applied from a cancelled turn).
 
+import { OFFLINE_MORPH_LINE } from './offlineGate';
 import { createMorphHold, MORPH_FEEL, type MorphHold, type MorphPointerType, type MorphRelease } from './morphHold';
 import type { MorphTargetRef } from './morphTarget';
 import {
@@ -64,6 +65,8 @@ export interface MorphFlowDeps {
   disabled(): boolean;
   /** Gemini engine with the scripted JSON this morph falls back to. */
   engine(json: string): SurfaceEngine;
+  /** True while offline (real or simulated): the turn sends nothing and says why. */
+  offline?(): boolean;
   deviceIdSession?: DeviceIdSession;
   sim?: boolean;
   mic: { start(): void; stop(): void; supported(): boolean };
@@ -333,6 +336,17 @@ export function createMorphFlow(deps: MorphFlowDeps): MorphFlow {
     const fid = frameId!;
     const plan = deps.plan(fid);
     if (!plan) { deps.card.showError("That board changed — pinch-hold again."); phase = 'idle'; clearOutline(); return; }
+    if (deps.offline?.()) {
+      // A morph is a Gemini call: offline, nothing is sent (final review A2).
+      clearListenTimer();
+      deps.mic.stop();
+      deps.typing?.(false);
+      deps.ui.state(OFFLINE_MORPH_LINE);
+      clearOutline();
+      phase = 'idle';
+      deps.card.showError(OFFLINE_MORPH_LINE);
+      return;
+    }
     const g = ++gen;
     phase = 'working';
     clearListenTimer();

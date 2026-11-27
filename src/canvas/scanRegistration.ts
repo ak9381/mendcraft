@@ -232,6 +232,18 @@ export function registerButtonLabel(owner: OwnerRecord | null): string {
   return owner ? 'Re-register' : 'Register';
 }
 
+/** The chip after a registration. ?sim=1 reads no face and locks nothing,
+ *  so it is labelled SIM (final review H1). */
+export function registeredChip(sim: boolean): string {
+  return sim ? 'SIM · registered (scripted)' : 'Registered';
+}
+/** What is said when a registration completes. */
+export function registeredLine(sim: boolean): string {
+  return sim
+    ? 'SIM · registered (scripted). No face was read, and tracking is not locked.'
+    : 'Registered. Tracking is locked to you.';
+}
+
 // ---------------------------------------------------------------- sim replay
 
 /** A deterministic synthetic open palm (same construction as the test

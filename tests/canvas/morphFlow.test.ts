@@ -548,3 +548,23 @@ describe('cancel()', () => {
     expect(h.applyCalls).toHaveLength(0);
   });
 });
+
+// Final review sim-1 A2: "Simulate offline" stops the morph's Gemini call too.
+describe('offline', () => {
+  it('a morph turn while offline never calls the engine and says why', async () => {
+    const h = makeHarness();
+    const streamSpy = vi.fn(async () => '{}');
+    const factory = vi.fn(() => ({ id: 'gemini' as const, sim: false, stream: streamSpy }));
+    h.deps.engine = factory as unknown as MorphFlowDeps['engine'];
+    h.deps.offline = () => true;
+    const flow = createMorphFlow(h.deps);
+    flow.beginHold({ x: 10, y: 10 }, 'mouse');
+    h.sched.advance(MORPH_FEEL.holdMs + 50);
+    flow.handleSpeech('make it warm');
+    await vi.waitFor(() => expect(h.card.calls.some((c) => c.startsWith('showError'))).toBe(true));
+    expect(streamSpy).not.toHaveBeenCalled();
+    expect(h.ui.sentCalls).toHaveLength(0);
+    expect(h.applyCalls).toHaveLength(0);
+    expect(h.ui.stateCalls.join(' ')).toMatch(/Offline/);
+  });
+});
