@@ -197,10 +197,12 @@ Kannada, a tampered stored artifact, and export/import.
   available here").
 - **Voice needs the network.** Chrome's speech recognition does not work
   offline. Offline, type the command.
-- **Offline reload.** Offline reload does not work on the live site yet.
-  Approved artifacts stay in IndexedDB and come back once the page loads.
-  `npm run e2e` tests a reload with every outside host blocked (the local
-  server still serves the page).
+- **Offline reload.** Works after one online load of /canvas.html: the
+  service worker serves the page, and approved artifacts come back from
+  IndexedDB. Hand tracking needs its MediaPipe files in the browser cache
+  (fetched in the background on that first online load). `npm run e2e` on a
+  production preview build checks it with the page and its service worker
+  both offline (the `swoffline` section).
 - **iPhone on-device AI is not Firebase AI Logic, and it is untested.** In the
   iOS shell, the "Nano" step can call Apple Foundation Models directly through
   our Capacitor plugin

@@ -50,7 +50,7 @@ result opens a review card. Nothing changes until you press **Approve** (or
 | 6 | `add Kannada` | Gemini writes a Kannada pack. The review shows the labels; anything that stays English is listed. Approve: the bar turns Kannada. `undo` goes back to English. |
 | 7 | `set the lamp to 500 percent` | **Needs a connected lamp.** With one: "Lamps go from 10 to 100 %. Nothing changed." This is a fixed rule, and no model is asked. With no lamp there is nothing to act on, so the line is not a device command. |
 | 8 | **More → Demo → Simulate offline** | The button reads "Offline (simulated)" and the Gemini card says **Offline**. Now `build the dashboard` is drafted by Nano alone ("Offline · Quick only. Deep will improve it when you're back online."). `draw the floor plan` replies "Drawing a floor plan needs Gemini, and you are offline. Nothing was generated." Click the button again to go back online. |
-| 9 | **Real offline** | Offline reload of the live site is not supported yet; offline, the open page keeps your approved boards and Nano still drafts. Offline, type: voice needs the network. |
+| 9 | **Real offline** | Load the canvas once while online, then turn Wi-Fi off and reload: your approved boards and language pack come back from the device, the Gemini card says Offline, and Nano still drafts. Offline, type: voice needs the network. |
 | 10 | `show artifacts` | Every approved board, plan, connector and pack, with who made it ("Gemini · cloud", "Gemini Nano · on device", "You") and Remove / Export / Import. |
 
 Optional: **More → Hands** turns on the camera. Then "Palm to point · fist to
