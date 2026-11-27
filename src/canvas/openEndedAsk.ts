@@ -197,6 +197,40 @@ const STATE_CLAIMS: RegExp[] = [
 // caught by its own few words (no general foreign-word list: "AI helps."
 // must pass); a reply in another script cannot be read at all, see readable().
 const FOREIGN_CLAIMS = /\b(?:he|ha|hemos|has|j['’]ai|ai|avons|habe|hab|haben|ho|abbiamo|eu|já)\s+(?:\p{L}+\s+){0,3}?(?:encendid[oa]s?|apagad[oa]s?|puesto|añadido|cambiado|allumée?s?|éteinte?s?|ajoutée?s?|mise?|eingeschaltet|ausgeschaltet|angemacht|ausgemacht|hinzugefügt|acces[oa]|spent[oa]|aggiunt[oa]|liguei|desliguei|acendi|apaguei)(?!\p{L})|\b(?:está|están|est|sont|ist|sind|è|sono)\s+(?:ahora\s+|maintenant\s+|jetzt\s+|ora\s+)?(?:encendid[oa]s?|apagad[oa]s?|allumée?s?|éteinte?s?|an|aus|eingeschaltet|ausgeschaltet|acces[oa]|spent[oa])(?!\p{L})|\b(?:listo|hecho|fait|erledigt|fatto|pronto)\s*[,.!]/iu;
+// Final review sim-4 §2: a claim with no app noun ("I took care of it.",
+// "All done!", "That's sorted."), a noun the guard does not know ("I've added
+// milk to your list", "Timer started"), a hedge that is itself the claim
+// ("Perhaps it's done now", "I think that worked") and Kannada ("Aaytu, light
+// off maadide", "lamp on ಮಾಡಿದ್ದೇನೆ").
+const HEDGE = String.raw`(?:(?:I\s+(?:think|believe|guess|suppose|reckon|hope)|perhaps|probably|hopefully|it\s+(?:seems|looks)(?:\s+like)?|looks\s+like|seems\s+like)\s+)?`;
+const DONE_TAIL = String.raw`(?:\s+(?:and\s+dusted|now|already|for\s+you|as\s+(?:you\s+)?(?:asked|requested|wished|wanted)))*\s*(?:[.!…,—–-]|$)`;
+const GENERIC_PARTICIPLE = 'made|done|changed|paired|saved|updated|set\\s+up|set|created|added|logged|handled|completed|finished|scheduled|reset|switched|turned|sent|configured|enabled|disabled|activated|connected|removed|deleted|fixed|applied|installed|cleared|booked|placed|started|locked|unlocked|sorted|taken\\s+care\\s+of';
+const NO_NOUN_CLAIMS: RegExp[] = [
+  // "Done and dusted.", "All finished.", "It's all done now.", "That's sorted.", "Perhaps it's done now —"
+  new RegExp(String.raw`${S_START}${HEDGE}(?:(?:it|that|this|everything|all\s+that)\s*(?:['’]s|\s+is|\s+has|\s+was)\s+)?(?:all\s+|now\s+|already\s+)*(?:been\s+)?(?:done|finished|sorted(?:\s+out)?|complete(?:d)?|handled|taken\s+care\s+of)${DONE_TAIL}`, 'i'),
+  new RegExp(String.raw`${S_START}(?:job|mission|task|all)\s+(?:done|accomplished|complete(?:d)?)\b`, 'i'),
+  // "I took care of it.", "I've handled it for you.", "I made the change.", "I sorted that out."
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have|['’]d|\s+had)?\s+(?:just\s+|already\s+|now\s+|gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:took\s+care\s+of|taken\s+care\s+of|take\s+care\s+of|handled|sorted|done|did|finished|completed|logged|applied|saved|updated)\s+(?:it|that|this|them|everything|all\s+of\s+(?:it|that)|the\s+changes?|your\s+(?:changes?|request|settings?)|those\s+changes|what\s+you\s+asked)\b`, 'i'),
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+)?made\s+(?:the|those|these|your|all\s+the)\s+(?:changes?|update|edits?)\b`, 'i'),
+  // "I just finished creating it."
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+)?(?:finished|completed)\s+(?:${ACTING}|logging|pairing)\b`, 'i'),
+  // "The change has been made.", "Your settings have been changed.", "That's been updated."
+  new RegExp(String.raw`(?:\b(?:the|your|my|all|those|these)\s+(?:[\w’'-]+\s+){0,2}?[\w’'-]+|\b(?:it|that|this|everything|they))\s*(?:\s(?:has|have)|['’]s|['’]ve)\s+(?:now\s+|just\s+|already\s+|all\s+)?been\s+(?:${GENERIC_PARTICIPLE})\b`, 'i'),
+  // "Your connector is set up and working.", "The new board is live.", "Your message is on its way."
+  new RegExp(String.raw`\b(?:the|your)\s+(?:[\w’'-]+\s+){0,2}?[\w’'-]+\s+(?:is|are|['’]s|['’]re)\s+(?:now\s+|all\s+)?(?:set\s+up|live|enabled|activated|configured|paired|scheduled|complete|completed|handled|on\s+(?:its|their)\s+way)\b`, 'i'),
+  // "I created a connector…", "I've added milk to your list", "I've reset the camera."
+  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|now\s+|also\s+)?(?:created|added|set\s+up|reset|paired|connected|scheduled|logged|installed|configured|enabled|disabled|activated|deactivated|switched\s+(?:on|off)|turned\s+(?:on|off)|locked|unlocked|booked)\s+(?:(?:a|an|the|your|some|it|that|this|them)\b|[\w’'-]+\s+(?:to|for|on|in)\b)`, 'i'),
+  // "Timer started, 10 minutes.", "Board created successfully."
+  new RegExp(String.raw`${S_START}(?:the\s+|your\s+)?(?:[\w’'-]+\s+)?[\w’'-]+\s+(?:started|paired|connected|saved|created|updated|added|scheduled|logged|reset|enabled|activated|sent|booked)(?:\s+(?:successfully|for\s+you|now|already|as\s+(?:you\s+)?asked))?\s*(?:[.!…,—–]|$)`, 'i'),
+  // "Yes, saved.", "Sent!"
+  new RegExp(String.raw`${S_START}(?:(?:yes|yep|yeah|okay|ok|sure|alright|there|and)[,!\s]+)?(?:all\s+)?(?:saved|sent|logged|updated|added|created|paired|connected|switched\s+(?:on|off)|turned\s+(?:on|off)|scheduled|booked|reset|changed|applied)(?:\s+(?:now|for\s+you|already|successfully))?\s*(?:[.!…]|$)`, 'i'),
+  // "Looks like it worked!", "I think that worked —"
+  new RegExp(String.raw`${S_START}${HEDGE}(?:it|that|this)\s+(?:worked|did\s+the\s+trick|went\s+through)(?!\s+out)\b`, 'i'),
+];
+/** Kannada words that say it was done (romanised or in script); a question ("Oota aaytha?") was taken out before. */
+const KANNADA_CLAIMS = /(?<![\p{L}\p{M}])(?:maad(?:i)?d(?:e|ini|iddini|iddeeni|deeni|ene|eeni)|maadiddini|maadiddeeni|maad(?:t|th)(?:ini|eeni|eene|iini)|haak(?:i)?d(?:e|ini|deeni)|haak(?:t|th)(?:ini|eeni)|aagide|agide|aagbittu|aaytu|aaythu|aaitu|aytu|ಆಯ್ತು|ಆಯಿತು|ಮಾಡಿದೆ|ಮಾಡಿದ್ದೇನೆ|ಮಾಡಿದ್ದೀನಿ|ಮಾಡಿದೀನಿ|ಮಾಡುತ್ತೇನೆ|ಮಾಡ್ತೀನಿ|ಆಗಿದೆ|ಹಾಕಿದೆ|ಹಾಕಿದ್ದೇನೆ)(?![\p{L}\p{M}])/iu;
+/** An emoji stands where a full stop would ("Lamp off ✅", "Sent! 📨"). */
+const EMOJI = /\p{Extended_Pictographic}[\p{Extended_Pictographic}️‍⃣]*/gu;
 /** True when the guard can read the reply: most of its letters are plain
  *  Latin (a name restored in another script is fine). */
 export function readable(text: string): boolean {
@@ -239,11 +273,13 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
   if (STATE_CLAIMS.some((re) => re.test(t))) return true;
   if (assertsThingState(t)) return true;
   if (FOREIGN_CLAIMS.test(t)) return true;
+  if (NO_NOUN_CLAIMS.some((re) => re.test(t))) return true;
+  if (KANNADA_CLAIMS.test(t)) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
 /** Sentences that only teach her what to say are not judged. */
-const judged = (t: string): string => claimText(t.split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' '));
+const judged = (t: string): string => claimText(t.replace(EMOJI, '.').split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' '));
 
 // ── What may be a claim (final review sim-2 §3) ───────────────────────────
 // A claim ASSERTS a state. A question, a condition ("If the lamp is off, tap
@@ -265,6 +301,10 @@ const NOT_CLAIM_CLAUSE: RegExp[] = [
   /\b(?:sounds?|looks?|seems?|feels?)\s+(?:very\s+|really\s+|so\s+)?(?:well|lovely|great|good|nice|wonderful|thoughtful|tidy|cosy|cozy|beautiful|clever|smart)\b|\bwell\s+(?:thought\s+out|done|made|planned)\b/i,
   // A purpose ("To turn the lamp on, say …") and a definition ("A lamp is on when …").
   /^\s*(?:in\s+order\s+)?to\s+[a-z]+\b/i,
+  // Final review sim-4 §2: "The purpose of the … command is to…", "Brightness is how much light a lamp gives off."
+  /^\s*(?:the\s+)?(?:purpose|point|job|aim|goal|meaning)\s+of\b/i,
+  /\b(?:is|are)\s+(?:simply\s+|just\s+)?to\s+(?!\d)[a-z]+\b/i,
+  /^\s*(?:the\s+)?[\w’'-]+(?:\s+[\w’'-]+)?\s+(?:is|are|means)\s+(?:how|what|when|where|the\s+(?:amount|measure|level|way))\b/i,
   /^(?![^]*\b(?:your|you|I|we|now|just)\b)\s*(?:a|an|any|every|each)\s+[a-z]/i,
   /^\s*(?:(?:great|good|nice|wonderful|oh|aw+|lovely)[\s,!]+)*(?:I\s*['’]m\s+|I\s+am\s+)?(?:so\s+|really\s+|very\s+)?(?:glad|happy|pleased|relieved)\b(?!\s+to\b(?!\s+hear))/i,
   /\bin\s+(?:my|your)\s+(?:imagination|head|mind|dreams?)\b|\bin\s+(?:the|a|this)\s+(?:story|song|poem|joke|game)\b/i,
@@ -287,7 +327,7 @@ function assertsThingState(text: string): boolean {
   for (const clause of t.split(/[.!?…;,—–]+/)) {
     if (APP_NOUN.test(clause) && RESULT_WORD.test(clause)) return true;
     // "I've set a reminder", "I made you a new board", "I kept the lamp on".
-    if (APP_NOUN.test(clause) && /\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|also\s+)?(?:set|made|got|put|kept|left)\b/i.test(clause)) return true;
+    if (APP_NOUN.test(clause) && /\bI\s*(?:['’]ve|\s+have)?\s+(?:just\s+|already\s+|also\s+)?(?:set|made|got(?!\s+(?:your|the|that|this)\s+(?:message|note|point|question|words?)\b)|put|kept|left)\b/i.test(clause)) return true;
     if (PRONOUN_ACTED.test(clause) || PRONOUN_STATE.test(clause)) return true;
   }
   // "Here's your new dashboard.", "Off it goes!", "Okay, quieter now."
@@ -310,10 +350,15 @@ export function claimText(text: string): string {
     if (/\?\s*["'”’)\]]*\s*$/.test(sentence)) continue;
     const parts = sentence.split(/([,;:—–]\s*|\s+-\s+)/);
     let kept = '';
+    // "If you turned the lamp on, the room would be brighter": the result of an
+    // "if" is make-believe too (but "If you like, I've…" is still judged).
+    let hypothetical = false;
     for (let i = 0; i < parts.length; i += 2) {
       const clause = parts[i] ?? '';
       const sep = parts[i + 1] ?? '';
-      if (NOT_CLAIM_CLAUSE.some((re) => re.test(clause))) {
+      if (i === 0 && /^\s*(?:and\s+|but\s+|so\s+)?(?:if|suppose|imagine)\b/i.test(clause)) hypothetical = true;
+      const madeUp = hypothetical && i > 0 && /\b(?:would|could|might)\b|['’]d\b/i.test(clause) && !/\bI\b/.test(clause.replace(/\bI['’]d\b/g, ''));
+      if (madeUp || NOT_CLAIM_CLAUSE.some((re) => re.test(clause))) {
         // A dropped clause keeps the sentence's end, so the clause before it still ends a sentence.
         const end = /[.!…]+["'”’)\]]*\s*$/.exec(clause)?.[0] ?? '';
         kept += end ? (kept ? end : '') : '';
@@ -342,6 +387,11 @@ export function promiseGuard(reply: string, asked = ''): { reply: string; replac
 
 /** A clause that could still turn into a promise once its sentence ends. */
 const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|no|nope|nah|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST}|made|got|left|kept|had)\b|\bthere\s*(?:['’]s|\s+is|\s+are)\s+now\b|(?:${THING})\s+(?:${STATE}|${APP_PAST})\b`, 'i');
+/** Final review sim-4 §2: openers and hedges that a state answer or a claim
+ *  may follow ("Hmm, the lamp is off.", "Perhaps it's done now —"). */
+const RISKY_OPENER = /^\s*(?:hmm+|well|actually|not\s+yet|all\s+good|got\s+it|alright|great|perfect|there|oh|perhaps|probably|hopefully|maybe|I\s+(?:think|believe|guess|suppose|hope|reckon)|it\s+(?:seems|looks)|looks\s+like|seems\s+like)\b/i;
+/** A sentence that is only an opener ("No.", "Yes!", "Okay."): held with the sentence after it. */
+const OPENER_ONLY = /^\s*(?:(?:yes|yeah|yep|yup|no|nope|nah|okay|ok|sure|alright|right|hmm+|well|actually|oh|great|perfect|there|got\s+it|all\s+good|not\s+yet|of\s+course|absolutely|certainly|definitely)[\s,.!…—–-]*)+$/i;
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the
@@ -362,9 +412,10 @@ export function guardSafePrefix(full: string): string | null {
     const end = m.index + m[0].length;
     const clause = t.slice(clauseStart, end);
     const sentenceEnd = /[.!?…]/.test(m[0]);
-    if (held === null && RISKY.test(clause)) held = clauseStart;
+    // Another script in a clause: the guard reads only a few of its words, so hold to the sentence end.
+    if (held === null && (RISKY.test(clause) || RISKY_OPENER.test(clause) || /[^\P{L}A-Za-zÀ-ɏ]/u.test(clause))) held = clauseStart;
     if (held === null) out = end;
-    else if (sentenceEnd) { held = null; out = end; } // the whole sentence passed promisesAction above
+    else if (sentenceEnd && !OPENER_ONLY.test(t.slice(held, end))) { held = null; out = end; } // the whole sentence passed promisesAction above
     clauseStart = end;
   }
   return t.slice(0, out).trim();
