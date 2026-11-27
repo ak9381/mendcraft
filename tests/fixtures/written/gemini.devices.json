@@ -1,0 +1,10 @@
+{
+  "engine": "gemini",
+  "model": "none (hand-written)",
+  "turnKind": "devices",
+  "recordedAt": "2026-11-27T07:30:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. It writes two made-up rows and an 'ip' field on purpose, so the e2e can check the rows are never shown (the table fills itself) and the field is dropped with a note. Re-record from a live run.",
+  "reply": "```json\n{\"kind\": \"room\", \"title\": \"My devices\", \"tiles\": [{\"type\": \"card\", \"title\": \"What is connected\", \"children\": [{\"type\": \"table\", \"title\": \"Devices\", \"source\": \"devices\", \"fields\": [\"device\", \"status\", \"ip\"], \"columns\": [\"Device\", \"Status\"], \"rows\": [[\"Fridge\", \"Online\"], [\"Oven\", \"Connected\"]]}]}]}\n```"
+}

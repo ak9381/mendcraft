@@ -16,7 +16,7 @@ import { PLAN_TEMPLATES } from '../../src/canvas/surfacePlan';
 import { buildPlanTemplate } from '../../src/plan/templates';
 import { PLAN_EDIT_EVENT } from '../../src/canvas/planHandSurface';
 
-const REPLY = (JSON.parse(readFileSync(join(__dirname, '../fixtures/replies/gemini.plan.json'), 'utf8')) as { reply: string }).reply;
+const REPLY = (JSON.parse(readFileSync(join(__dirname, '../fixtures/written/gemini.plan.json'), 'utf8')) as { reply: string }).reply;
 const room = (name: string, x: number, y: number, w = 3000, h = 3000) => ({ name, x, y, w, h });
 
 describe('planFromReply', () => {

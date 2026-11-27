@@ -1,6 +1,6 @@
 // The replay engine: a tiny SurfaceEngine that answers a turn with a reply
 // recorded from a real model run (or, as a labelled stop-gap, hand-written).
-// It holds NO replies itself — they come from tests/fixtures/replies/, which
+// It holds NO replies itself — they come from tests/fixtures/, which
 // the e2e script hands the page as window.__mcFixtures before it loads, or a
 // unit test passes inline. canvasMain wires it only in DEV / VITE_E2E builds
 // with ?sim=1, and every turn it answers says "Replay · recorded reply" when
@@ -77,6 +77,64 @@ export function createReplayEngines(replies: Record<string, string>, o: { record
     };
   };
   return { nano: make('nano'), gemini: make('gemini') };
+}
+
+/** What a recording reports with each reply (the fixture file's fields). */
+export interface RecordedMeta { engine: EngineId; model: string; turnKind: TurnKind; promptSha: string }
+export type RecordSink = (key: string, reply: string, meta: RecordedMeta) => void;
+type EngineFactory = (kind: TurnKind, sub?: string) => SurfaceEngine | undefined;
+
+/** sha-256 of the prompt, hex; '' where the browser has no SubtleCrypto. */
+async function sha256Hex(text: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return '';
+  try {
+    const d = await subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { return ''; }
+}
+
+/** The live engines, wrapped so every reply a turn really got is reported to
+ *  `sink` once, under the key a replay of the same run looks it up by: the
+ *  first turn of a kind is `<key>` (or `<key>.<sub>`), a later one
+ *  `<key>.<n>` (n counted per engine and kind, as the replay counts). The
+ *  reply is passed through unchanged; a turn that fails reports nothing.
+ *  A recorded turn runs down the replay path (`sim: true`), so the reply
+ *  answers the very prompt a replay of it will send. canvasMain wires this
+ *  only in a test build with ?record=1 — never in production. */
+export function recordingEngines(
+  live: Partial<Record<EngineId, EngineFactory>>,
+  sink: RecordSink,
+  o: { modelOf?: (id: EngineId) => string } = {},
+): Partial<Record<EngineId, EngineFactory>> {
+  const modelOf = o.modelOf ?? ((id: EngineId) => (id === 'nano' ? 'gemini-nano' : 'gemini'));
+  const turns = new Map<string, number>();
+  const written = new Set<string>();
+  const keyFor = (base: string, n: number, sub?: string): string => {
+    const first = sub ? `${base}.${sub}` : base;
+    return written.has(first) ? `${first}.${n}` : first;
+  };
+  const wrap = (id: EngineId, make: EngineFactory): EngineFactory => (kind, sub) => {
+    const engine = make(kind, sub);
+    if (!engine) return undefined;
+    const base = replayKey(id, kind);
+    return {
+      ...engine,
+      sim: true,
+      async stream(prompt, onText, opts) {
+        const n = (turns.get(base) ?? 0) + 1;
+        turns.set(base, n);
+        const reply = await engine.stream(prompt, onText, opts);
+        const key = keyFor(base, n, sub);
+        written.add(key);
+        sink(key, reply, { engine: id, model: modelOf(id), turnKind: kind, promptSha: await sha256Hex(prompt) });
+        return reply;
+      },
+    };
+  };
+  const out: Partial<Record<EngineId, EngineFactory>> = {};
+  for (const id of ['nano', 'gemini'] as const) { const f = live[id]; if (f) out[id] = wrap(id, f); }
+  return out;
 }
 
 /** At most this many fixture devices in one run. */

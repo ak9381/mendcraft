@@ -19,7 +19,7 @@ import { spokenLangFor } from '../../src/ai/readAloud';
 import type { CanvasDoc } from '../../src/canvas/frames';
 import { KN_PACK } from '../helpers/knPack';
 
-const FIXTURE = JSON.parse(readFileSync(join(__dirname, '../fixtures/replies/gemini.pack.kn.json'), 'utf8')) as { reply: string };
+const FIXTURE = JSON.parse(readFileSync(join(__dirname, '../fixtures/written/gemini.pack.kn.json'), 'utf8')) as { reply: string };
 const packArtifact = (over: Partial<Artifact> = {}): Artifact => ({
   id: 'pack-kn', kind: 'pack', v: 1, title: 'Language: kn', by: 'gemini', at: 1, status: 'approved',
   data: KN_PACK as unknown as Record<string, unknown>, ...over,

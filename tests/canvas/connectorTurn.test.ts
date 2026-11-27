@@ -72,7 +72,7 @@ describe('parseConnectorReply', () => {
   });
 
   it('the recorded fixture parses and asks for port 38899', () => {
-    const rec = JSON.parse(readFileSync(join(__dirname, '../fixtures/replies/gemini.connector.json'), 'utf8')) as { reply: string };
+    const rec = JSON.parse(readFileSync(join(__dirname, '../fixtures/written/gemini.connector.json'), 'utf8')) as { reply: string };
     const r = parseConnectorReply(rec.reply, lampConnectorKey());
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.connector.actions.every((a) => a.request.port === 38899)).toBe(true);

@@ -23,7 +23,9 @@ import { nanoQueue } from '../ai/nanoQueue';
 import { activePeople } from '../privacy/directory';
 import { createPhoneAiForwarder } from './phoneAiFeed';
 import { ensureDeviceId } from '../relay/pairingStore';
-import { createReplayEngines, fixtureDevices } from './replayEngine';
+import { createReplayEngines, fixtureDevices, recordingEngines, type RecordedMeta } from './replayEngine';
+import { remoteSettings } from '../firebase/remoteConfig';
+import { redactForCloud } from '../ai/redact';
 import { joinCanvasDoc, LAYOUT_KEY, tooManyBoardsLine, unjoinedIds } from './canvasPersistence';
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
@@ -34,9 +36,17 @@ import { coerceSnapshot } from '../relay/controlSnapshot';
 const params = new URLSearchParams(location.search);
 /** Test hooks and replay engines: dev server or a VITE_E2E=1 build only. */
 const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
+/** Recording (scripts/record-fixtures.mjs): a test build with ?record=1 runs
+ *  the LIVE models and keeps each reply in window.__mcRecorded. With ?sim=1
+ *  too, the devices and phones are the SIM fixtures the replay uses, so no
+ *  real device id can reach a reply. Never on in a production build. */
+const recordOn = testBuild && params.get('record') === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
-const replayOn = testBuild && params.get('sim') === '1';
-type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; devices?: unknown } };
+const replayOn = testBuild && params.get('sim') === '1' && !recordOn;
+/** ?sim=1 means no live model — except while recording. */
+const noLiveModel = params.has('sim') && !recordOn;
+type Recorded = RecordedMeta & { recordedAt: string; source: 'recorded'; reply: string };
+type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded> };
 const mcWindow = window as McWindow;
 
 // ---- the starting document: layout (localStorage) + artifacts (the store) ----
@@ -110,7 +120,7 @@ const cloud: CloudStream | undefined = isEnabled()
 // other model call: one queued prompt per turn, however many cursors the
 // canvas draws. Chrome's LanguageModel global is only checked for presence
 // and availability. No Firebase config, a phone, or ?sim=1 means Nano is off.
-const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !params.has('sim') && isEnabled()
+const nanoStream: OnDeviceStream | null = languageModel && !isPhone && !noLiveModel && isEnabled()
   ? (prompt, onText, o) => streamOnDevice({
       system: o?.system && o.user ? o.system : undefined,
       prompt: o?.system && o.user ? o.user : prompt,
@@ -189,11 +199,20 @@ const liveEngines = createEngines({
     apple.plugin = plugin;
     return generateAppleText(prompt, onText, plugin);
   },
-  sim: params.has('sim'),
+  sim: noLiveModel,
 });
-const engines = replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded }) : liveEngines;
+/** A recording keeps each live reply as its fixture file will hold it. The
+ *  reply gets the same redaction a cloud prompt gets (names, phone numbers,
+ *  emails), so nothing personal is written down. */
+function recordReply(key: string, reply: string, meta: RecordedMeta): void {
+  const book = (mcWindow.__mcRecorded ??= {});
+  book[key] = { ...meta, recordedAt: new Date().toISOString(), source: 'recorded', reply: redactForCloud(reply).text };
+}
+const engines = recordOn
+  ? recordingEngines(liveEngines, recordReply, { modelOf: (id) => (id === 'nano' ? 'gemini-nano (Chrome built-in)' : remoteSettings().cloudModel) })
+  : replayOn ? createReplayEngines(mcWindow.__mcFixtures?.replies ?? {}, { recorded: mcWindow.__mcFixtures?.recorded }) : liveEngines;
 // Test build + ?sim=1 only: the devices a run registers (simulated, labelled SIM).
-const simDevices = replayOn ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
+const simDevices = replayOn || (recordOn && params.get('sim') === '1') ? fixtureDevices(mcWindow.__mcFixtures?.devices) : null;
 
 // Phone shell: forward this phone's AI terminal activity to the paired
 // laptop's AI monitor (compact, redacted, ≤5/s; dropped with no session).
@@ -449,7 +468,7 @@ if (testBuild) mcWindow.__mcCanvas = handle;
 // auto-generated preview channel domain is often not in the App Check /
 // reCAPTCHA authorized-domains list, so this call alone can 403 there for no
 // reason a sim run needs to care about.
-if (!params.has('sim')) {
+if (!noLiveModel) {
   void prepareHybrid().then(async () => {
     // Say it once, up front, when this address can't pass App Check — rather
     // than leaving it to be discovered on the first Gemini turn.

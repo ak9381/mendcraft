@@ -63,7 +63,7 @@ describe('a live devices table', () => {
 
   it('offline, Nano names the board and picks the columns; the board is built in code around the live table', () => {
     expect(unsupportedConstraintKeywords(NANO_DEVICES_CONSTRAINT)).toEqual([]);
-    const rec = JSON.parse(readFileSync('tests/fixtures/replies/nano.devices.json', 'utf8')) as { reply: string };
+    const rec = JSON.parse(readFileSync('tests/fixtures/written/nano.devices.json', 'utf8')) as { reply: string };
     const r = devicesPlanFromNano(rec.reply);
     expect(r.ok && r.value).toEqual({ kind: 'room', title: 'My devices', tiles: [{ type: 'table', title: 'Devices', columns: ['Device', 'Kind', 'Status'], rows: [], sortable: false, source: 'devices', fields: ['device', 'kind', 'status'] }] });
     expect(r.ok && isDevicesBoard(r.value)).toBe(true);
@@ -79,7 +79,7 @@ describe('a live devices table', () => {
   });
 
   it('the devices reply fixture parses to a live board; its made-up rows and its ip field never survive', () => {
-    const rec = JSON.parse(readFileSync('tests/fixtures/replies/gemini.devices.json', 'utf8')) as { reply: string };
+    const rec = JSON.parse(readFileSync('tests/fixtures/written/gemini.devices.json', 'utf8')) as { reply: string };
     const r = parseModelPlan(rec.reply);
     expect(r.ok).toBe(true);
     if (!r.ok) return;

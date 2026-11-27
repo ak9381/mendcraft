@@ -1,0 +1,10 @@
+{
+  "engine": "nano",
+  "model": "none (hand-written)",
+  "turnKind": "steps",
+  "recordedAt": "2026-11-27T07:30:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. Three steps whose 'say' each routes to a real command. Re-record from a live run.",
+  "reply": "{\"steps\": [{\"id\": \"build-dashboard\", \"label\": \"Build the dashboard\", \"say\": \"build the dashboard\"}, {\"id\": \"floor-plan\", \"label\": \"Draw a floor plan\", \"say\": \"draw a two bedroom floor plan\"}, {\"id\": \"connect-device\", \"label\": \"Connect a device\", \"say\": \"connect a device\"}]}"
+}

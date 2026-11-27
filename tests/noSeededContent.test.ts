@@ -1,5 +1,5 @@
 // Guard: src/ holds no seeded boards, devices or scripted model replies.
-// Recorded replies live only in tests/fixtures/replies/. Later tasks append
+// Recorded replies live only in tests/fixtures/ (replies/, written/). Later tasks append
 // to BANNED as they strip more. Every .ts/.js/.mjs/.json file under src/ is read.
 import fs from 'node:fs';
 import path from 'node:path';

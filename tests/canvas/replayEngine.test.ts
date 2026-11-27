@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createReplayEngines, missingReplyLine, NO_MODEL_LINE, REPLAY_ROUTE, WRITTEN_ROUTE, replayKey, replayRouteIn } from '../../src/canvas/replayEngine';
+import { createReplayEngines, missingReplyLine, NO_MODEL_LINE, recordingEngines, REPLAY_ROUTE, WRITTEN_ROUTE, replayKey, replayRouteIn } from '../../src/canvas/replayEngine';
+import type { SurfaceEngine } from '../../src/canvas/aiTurn';
 
 describe('replay engine', () => {
   it('keys replies by engine, turn kind and an optional turn number', () => {
@@ -50,5 +51,83 @@ describe('replay engine', () => {
     expect(replayRouteIn(REPLAY_ROUTE)).toBe(REPLAY_ROUTE);
     expect(replayRouteIn('Gemini · cloud')).toBeNull();
     expect(replayRouteIn(undefined)).toBeNull();
+  });
+  it('a replay engine asked for a missing key rejects with "No recorded reply for <key>"', async () => {
+    const e = createReplayEngines({ 'nano.board': 'x' }).nano!('steps');
+    await expect(e.stream('p', () => {})).rejects.toThrow('No recorded reply for nano.steps');
+  });
+
+  it('a second ask for the same kind uses <key>.2 when it exists', async () => {
+    const f = createReplayEngines({ 'gemini.devices': 'first', 'gemini.devices.2': 'second' }).gemini!;
+    expect(await f('devices').stream('p', () => {})).toBe('first');
+    expect(await f('devices').stream('p', () => {})).toBe('second');
+  });
+});
+
+describe('recording engines', () => {
+  const live = (id: 'nano' | 'gemini', replies: string[]): (kind: string) => SurfaceEngine => {
+    let i = 0;
+    return () => ({
+      id, sim: false, routeLine: `${id} live`,
+      async stream(_p, onText) { const r = replies[i++] ?? ''; onText(r.slice(0, 2)); onText(r); return r; },
+    });
+  };
+  const sinkOf = () => {
+    const got: { key: string; reply: string; meta: { engine: string; model: string; turnKind: string; promptSha: string } }[] = [];
+    return { got, sink: (key: string, reply: string, meta: { engine: 'nano' | 'gemini'; model: string; turnKind: string; promptSha: string }) => { got.push({ key, reply, meta }); } };
+  };
+
+  it('recordingEngines passes the live reply through unchanged and reports it once', async () => {
+    const { got, sink } = sinkOf();
+    const rec = recordingEngines({ gemini: live('gemini', ['```json\n{"kind":"room"}\n```']) }, sink, { modelOf: () => 'gemini-test' });
+    const e = rec.gemini!('board')!;
+    const seen: string[] = [];
+    const out = await e.stream('the prompt', (t) => seen.push(t));
+    expect(out).toBe('```json\n{"kind":"room"}\n```');
+    expect(seen).toEqual(['``', '```json\n{"kind":"room"}\n```']);
+    expect(got).toHaveLength(1);
+    expect(got[0].key).toBe('gemini.board');
+    expect(got[0].reply).toBe(out);
+    expect(got[0].meta.engine).toBe('gemini');
+    expect(got[0].meta.model).toBe('gemini-test');
+    expect(got[0].meta.turnKind).toBe('board');
+    expect(got[0].meta.promptSha).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('records under the keys a replay looks up: <key>, then <key>.<n>, and <key>.<sub> for a pack', async () => {
+    const { got, sink } = sinkOf();
+    const rec = recordingEngines({ nano: live('nano', ['a', 'b', 'c']), gemini: live('gemini', ['kn', 'kn2']) }, sink);
+    for (let i = 0; i < 3; i += 1) await rec.nano!('board')!.stream('p', () => {});
+    await rec.gemini!('pack', 'kn')!.stream('p', () => {});
+    await rec.gemini!('pack', 'kn')!.stream('p', () => {});
+    expect(got.map((g) => g.key)).toEqual(['nano.board', 'nano.board.2', 'nano.board.3', 'gemini.pack.kn', 'gemini.pack.kn.2']);
+    // And the replay engines answer each turn from exactly those keys.
+    const book = Object.fromEntries(got.map((g) => [g.key, g.reply]));
+    const replay = createReplayEngines(book);
+    expect([await replay.nano!('board').stream('p', () => {}), await replay.nano!('board').stream('p', () => {}), await replay.nano!('board').stream('p', () => {})]).toEqual(['a', 'b', 'c']);
+    expect([await replay.gemini!('pack', 'kn').stream('p', () => {}), await replay.gemini!('pack', 'kn').stream('p', () => {})]).toEqual(['kn', 'kn2']);
+  });
+
+  it('a live turn that fails reports nothing and fails the same way', async () => {
+    const { got, sink } = sinkOf();
+    const failing = () => ({ id: 'gemini' as const, sim: false, stream: () => Promise.reject(new Error('App Check 403')) });
+    const rec = recordingEngines({ gemini: failing }, sink);
+    await expect(rec.gemini!('plan')!.stream('p', () => {})).rejects.toThrow('App Check 403');
+    expect(got).toEqual([]);
+  });
+
+  it('no live engine for a step stays no engine (the turn says no model)', () => {
+    const { sink } = sinkOf();
+    const rec = recordingEngines({ nano: () => undefined }, sink);
+    expect(rec.nano!('board')).toBeUndefined();
+    expect(rec.gemini).toBeUndefined();
+  });
+
+  it('a recorded turn runs down the replay path (sim), so its reply answers the prompt a replay sends', () => {
+    const { sink } = sinkOf();
+    const rec = recordingEngines({ nano: live('nano', ['x']) }, sink);
+    const e = rec.nano!('board')!;
+    expect(e.sim).toBe(true);
+    expect(e.routeLine).toBe('nano live');
   });
 });

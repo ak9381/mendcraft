@@ -11,7 +11,9 @@
     "gen-icons": "node scripts/gen-icons.mjs",
     "eval:commands": "vitest run --config vitest.eval.config.ts",
     "a11y:axe": "node scripts/a11y-axe.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node scripts/e2e-actual.mjs",
+    "record": "node scripts/record-fixtures.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.6.2",

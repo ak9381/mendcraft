@@ -161,9 +161,9 @@ describe('no scripted chip lists', () => {
     expect(hybrid).not.toMatch(/pickNextStepsOnDevice|NEXT_STEPS_CONSTRAINT/);
   });
   it('the recorded steps fixture passes the check', () => {
-    const files = readdirSync('tests/fixtures/replies');
+    const files = readdirSync('tests/fixtures/written');
     expect(files).toContain('nano.steps.json');
-    const rec = JSON.parse(readFileSync('tests/fixtures/replies/nano.steps.json', 'utf8')) as { reply: string };
+    const rec = JSON.parse(readFileSync('tests/fixtures/written/nano.steps.json', 'utf8')) as { reply: string };
     const r = coerceNextSteps({ ...JSON.parse(rec.reply), at: 'devices' });
     expect(r.ok && r.value.steps).toHaveLength(3);
   });

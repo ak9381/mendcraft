@@ -1,10 +1,15 @@
 // e2e-actual.mjs — the "actual demo" journey against a local dev server,
-// one section per plan task. Recorded replies come only from
-// tests/fixtures/replies/ (handed to the page as window.__mcFixtures before
-// it loads); nothing is scripted in the app.
+// one section per plan task, then the whole journey on one page. Model
+// replies come only from tests/fixtures/ (handed to the page as
+// window.__mcFixtures before it loads); nothing is scripted in the app.
+// The sections replay tests/fixtures/written/ (hand-written examples their
+// checks are pinned to); the journey replays tests/fixtures/replies/ (what
+// `npm run record` captures from live models).
 //
 //   npx vite                     # in one terminal (http://localhost:5173)
-//   node scripts/e2e-actual.mjs [--only <section>]
+//   node scripts/e2e-actual.mjs [--only <section>]   # or: npm run e2e
+//
+// With no --only every section runs, in journey order, then "journey".
 //
 // Exit code 1 on any failed check, 2 when it cannot run (no Chrome, no server).
 
@@ -14,11 +19,15 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pollUntil } from './e2eWait.lib.mjs';
+import { JOURNEY_DEVICES, JOURNEY_LINES, line } from './journey.lib.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = (process.env.E2E_URL || 'http://localhost:5173').replace(/\/$/, '');
-const FIXTURES = join(ROOT, 'tests/fixtures/replies');
+/** The replies the journey replays (recorded by `npm run record`). */
+const REPLIES = join(ROOT, 'tests/fixtures/replies');
+/** The hand-written examples the per-section checks are pinned to. */
+const WRITTEN = join(ROOT, 'tests/fixtures/written');
 
 const argv = process.argv.slice(2);
 const onlyAt = argv.indexOf('--only');
@@ -35,13 +44,13 @@ function findChrome() {
 
 /** Every reply file: file name without .json → its `reply` text, and the
  *  keys whose `source` is "recorded" (every other one is a written example). */
-function loadReplies() {
+function loadReplies(dir) {
   const replies = {};
   const recorded = [];
-  if (!existsSync(FIXTURES)) return { replies, recorded };
-  for (const f of readdirSync(FIXTURES)) {
+  if (!existsSync(dir)) return { replies, recorded };
+  for (const f of readdirSync(dir)) {
     if (!f.endsWith('.json')) continue;
-    const rec = JSON.parse(readFileSync(join(FIXTURES, f), 'utf8'));
+    const rec = JSON.parse(readFileSync(join(dir, f), 'utf8'));
     if (typeof rec.reply !== 'string') throw new Error(`${f}: no "reply" string`);
     const key = f.slice(0, -'.json'.length);
     replies[key] = rec.reply;
@@ -941,7 +950,7 @@ async function persist(page) {
 SECTIONS.persist = persist;
 
 // ---- language: "add Kannada" → a reviewed Gemini pack → the bar in Kannada → still Kannada after an offline reload ----
-const KN_FIXTURE = JSON.parse(readFileSync(join(FIXTURES, 'gemini.pack.kn.json'), 'utf8'));
+const KN_FIXTURE = JSON.parse(readFileSync(join(WRITTEN, 'gemini.pack.kn.json'), 'utf8'));
 const KN_PACK_REPLY = JSON.parse(KN_FIXTURE.reply.slice(KN_FIXTURE.reply.indexOf('{'), KN_FIXTURE.reply.lastIndexOf('}') + 1));
 const bar = () => ({
   showEverything: document.querySelector('[data-i18n=showEverything]')?.textContent.trim(),
@@ -1161,19 +1170,261 @@ async function breakIt(page) {
 }
 SECTIONS.break = breakIt;
 
+// ---- journey: the whole demo (spec §10) on one page, from tests/fixtures/replies/ ----
+// One fresh canvas; every beat builds on the last. Checks stay true whatever
+// the recorded replies say (a live recording words things its own way):
+// each review shows before its change, every engine label says Replay, the
+// store ends with one artifact of each kind, a reload brings it all back,
+// and the whole run takes under 180 s.
+const JOURNEY_MAX_MS = 180_000;
+const anyReplay = (t) => /Replay · (recorded reply|written example)/.test(t ?? '');
+/** What a review must not have changed yet: the stored rows and the boards.
+ *  Next-step suggestions are left out: they are exempt from Approve (they only
+ *  say her words) and arrive on their own after the turn before. */
+const storeSig = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => ({
+  rows: l.filter((a) => a.kind !== 'steps').map((a) => `${a.id}@${a.v}`).sort().join(','),
+  frames: window.__mcCanvas.frames().map((f) => f.id).join(','),
+})));
+const kinds = (page) => page.evaluate(() => window.__mcArtifacts.list().then((l) => l.reduce((m, a) => ({ ...m, [a.kind]: (m[a.kind] ?? 0) + 1 }), {})));
+const frameHeads = () => [...document.querySelectorAll('.mc-frame-by')].filter((e) => !e.hidden).map((e) => e.textContent.trim());
+const deviceClasses = () => [...document.querySelectorAll('mc-device-tile')].map((t) => t.shadowRoot?.querySelector('[data-device-cls]')?.getAttribute('data-device-cls')).filter(Boolean);
+/** Focus a board without waiting on the camera move (a cancelled flyTo can
+ *  leave focus() unresolved — a parked minor in the ledger). */
+const focusBoard = async (page, id) => { await page.evaluate((f) => { void window.__mcCanvas.focus(f); }, id); await sleep(900); };
+const pressIn = (cls, sel) => [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector(`[data-device-cls=${cls}]`))?.shadowRoot.querySelector(sel)?.click();
+
+async function journey(page) {
+  const t0 = Date.now();
+  const reviews = []; // { beat, label, before, at-open, after }
+  const labels = [];  // every engine label seen on the way
+  await page.evaluateOnNewDocument((devices) => { window.__mcFixtures = { ...(window.__mcFixtures ?? {}), devices }; }, JOURNEY_DEVICES);
+
+  /** Say a beat's line; when it opens a review: check nothing changed while
+   *  it is open, approve it, and check that something did. */
+  const say = async (beat, o = {}) => {
+    const text = line(beat);
+    const before = await storeSig(page);
+    const mark = await page.evaluate(() => window.__mcCanvas.statusMark());
+    await page.evaluate((t) => { window.__mcCanvas.run(t); }, text);
+    if (!o.review) return true;
+    if (!(await waitFor(page, reviewOpen, 20_000, `${beat}: the review opens ("${text}")`))) {
+      console.log(`     said since "${text}": ${JSON.stringify(await page.evaluate((m) => window.__mcCanvas.statusSince(m), mark))}`);
+      return false;
+    }
+    const review = await page.evaluate(reviewText);
+    await sleep(1200); // past the save debounce: nothing may be written while it waits
+    const open = await storeSig(page);
+    await page.evaluate(() => window.__mcCanvas.keep());
+    const changed = await pollUntil(async () => JSON.stringify(await storeSig(page)) !== JSON.stringify(open), 10_000);
+    const after = await storeSig(page);
+    // A turn may open an empty board to draw its ghost in; nothing is STORED until Approve.
+    const unchanged = before.rows === open.rows;
+    reviews.push({ beat, label: review.match(/Replay · (recorded reply|written example)/)?.[0] ?? null, unchanged, changed: changed.ok });
+    check(anyReplay(review), `${beat}: the review names a Replay engine (got ${JSON.stringify(review.slice(0, 200))})`);
+    check(unchanged, `${beat}: nothing was stored while the review was open (${JSON.stringify(before.rows)} → ${JSON.stringify(open.rows)})`);
+    check(changed.ok, `${beat}: approving it changed the store (${JSON.stringify(open)} → ${JSON.stringify(after)})`);
+    return changed.ok;
+  };
+
+  // ---- pair the phones (the SIM branch stands in for the chime)
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check((await frames(page)).length === 0, 'journey: an empty canvas to start');
+  await say('pair');
+  if (!(await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: two SIM phones join'))) return;
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on');
+
+  // ---- the devices board (generated around the live table), then next-step chips
+  if (!(await say('devices', { review: true }))) return;
+  await waitFor(page, () => [...document.querySelectorAll('mc-table-tile')].some((t) => t.shadowRoot?.querySelector('[data-live]')), 10_000, 'journey: the live devices table is on the canvas')
+    .then((ok) => ok && check(true, 'journey: the devices board shows the live table'));
+  const rows = await page.evaluate(liveTableRows);
+  check(rows.length === 5 && rows[0].startsWith('✓') && rows.some((r) => r.startsWith('Lamp | SIM')) && rows.some((r) => r.startsWith('Speaker | SIM')) && rows.some((r) => /^iPhone \| SIM.*Gimbal: docked/.test(r)),
+    `journey: the table lists the laptop, both phones (the stand docked on the iPhone), the lamp and the speaker (got ${JSON.stringify(rows)})`);
+  if (await waitFor(page, () => document.querySelectorAll('.mc-next .mc-next-chip').length > 0, 10_000, 'journey: next-step chips appear')) {
+    const chips = await page.evaluate(chipRow);
+    labels.push(['next steps', chips?.label]);
+  }
+
+  // ---- the dashboard: lamp, speaker and stand, driven through the checked binding
+  await page.evaluate(() => window.__mcCanvas.run('new board'));
+  if (!(await say('dashboard', { review: true }))) return;
+  await waitFor(page, (want) => want.every((c) => [...document.querySelectorAll('mc-device-tile')].some((t) => t.shadowRoot?.querySelector(`[data-device-cls=${c}]`))), 10_000, 'journey: lamp, speaker and stand tiles', ['lamp', 'music', 'gimbal'])
+    .then((ok) => ok && check(true, 'journey: the dashboard has a lamp, a speaker and a stand tile'));
+  await page.evaluate(pressIn, 'lamp', '[data-act=toggle]');
+  await waitFor(page, (id) => window.__mcCanvas.store.get(id)?.on === true, 5_000, 'journey: the lamp turns on', LAMP_ID).then((ok) => ok && check(true, 'journey: a press turns the SIM lamp on'));
+  await page.evaluate(pressIn, 'music', '[data-act=toggle]');
+  await waitFor(page, (id) => window.__mcCanvas.store.get(id)?.playing === true, 5_000, 'journey: the speaker plays', SPEAKER_ID).then((ok) => ok && check(true, 'journey: a press plays the SIM speaker'));
+  const modes = await page.evaluate(() => { const r = [...document.querySelectorAll('mc-device-tile')].find((x) => x.shadowRoot?.querySelector('[data-device-cls=gimbal]'))?.shadowRoot; const c = [...(r?.querySelectorAll('[data-act=chip]') ?? [])].find((b) => b.getAttribute('aria-pressed') !== 'true'); c?.click(); return !!c; });
+  if (modes) await waitFor(page, () => window.__mcCanvas.simRelayLog().some((m) => m.kind === 'gimbalMode'), 5_000, 'journey: a stand mode is sent').then((ok) => ok && check(true, 'journey: a stand chip sends one mode message to the SIM iPhone'));
+  const dashId = await page.evaluate(() => window.__mcCanvas.frames().find((f) => window.__mcCanvas.snapshot().surfaces[f.id]?.tiles?.length && JSON.stringify(window.__mcCanvas.snapshot().surfaces[f.id]).includes('"gimbal"'))?.id ?? null);
+
+  // ---- the lamp's connector, written as data
+  if (!(await say('connector', { review: true }))) return;
+  check((await kinds(page)).connector === 1, 'journey: the connector is stored once');
+
+  // ---- the floor plan on its own board, then a voice edit
+  if (!(await say('floorplan', { review: true }))) return;
+  if (!(await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg'), 10_000, 'journey: the drawing is on screen'))) return;
+  const planVersion = () => window.__mcArtifacts.list().then((l) => l.find((a) => a.kind === 'plan')?.v ?? 0);
+  await waitFor(page, planVersion, 5_000, 'journey: the drawing is stored');
+  const planV = await page.evaluate(planVersion);
+  if (!(await say('planEdit', { review: true }))) return;
+  await waitFor(page, (v) => window.__mcArtifacts.list().then((l) => (l.find((a) => a.kind === 'plan')?.v ?? 0) > v), 5_000, 'journey: the edited drawing is stored', planV);
+  const planV2 = await page.evaluate(planVersion);
+  check(planV2 === planV + 1, `journey: the voice edit is stored as the next version of the drawing (v${planV} → v${planV2})`);
+  const planId = await page.evaluate(() => window.__mcCanvas.frames().find((f) => f.kind === 'plan')?.id ?? null);
+
+  // ---- board to phone, at both edges
+  const layout = await page.evaluate(() => window.__mcCanvas.edgeLayout());
+  check(!!layout.left && !!layout.right && layout.left !== layout.right, `journey: a phone at each edge (got ${JSON.stringify(layout)})`);
+  const browser = page.browserContext().browser();
+  const mk = async (ios) => { const c = await browser.createBrowserContext(); const p = await c.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(String(e?.message || e))); return { c, p, errs, ok: await openPhone(p, ios) }; };
+  const phonesOpen = [];
+  try {
+    for (const [side, frameId, what] of [['right', dashId, 'dashboard'], ['left', planId, 'floor plan']]) {
+      if (!frameId || !layout[side]) continue;
+      await focusBoard(page, frameId);
+      check(await page.evaluate((s) => window.__mcCanvas.sendBoard(s), side), `journey: the ${what} is sent at the ${side} edge`);
+      const snap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
+      const phone = await mk(layout[side] === 'ios');
+      phonesOpen.push(phone);
+      if (!phone.ok || !snap) continue;
+      check(await phone.p.evaluate((s) => window.__mcGuestSnapshot(s), snap), `journey: the ${layout[side] === 'ios' ? 'iPhone' : 'Nothing phone'} takes the ${what}`);
+      await waitFor(phone.p, () => window.__mcCanvas.frames().length === 1, 10_000, `journey: the ${what} is on the phone`);
+      await sleep(1200);
+      const kept = await boardArtifacts(phone.p);
+      check(kept.length === 1 && kept[0].by === 'replay', `journey: the phone keeps the ${what}, made by replay (got ${JSON.stringify(kept.map((a) => a.by))})`);
+      check(phone.errs.length === 0, `journey: no page errors on the phone${phone.errs.length ? `: ${phone.errs.slice(0, 3).join(' | ')}` : ''}`);
+    }
+  } finally {
+    for (const ph of phonesOpen) await ph.c.close();
+  }
+
+  // ---- offline: every board comes back from the store; Nano still drafts
+  const titles = (await frames(page)).map((f) => f.title).sort();
+  await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
+  const offlineScript = await page.evaluateOnNewDocument(() => { Object.defineProperty(Navigator.prototype, 'onLine', { get: () => false, configurable: true }); });
+  await page.setRequestInterception(true);
+  const outside = [];
+  const onRequest = (r) => {
+    if (r.isInterceptResolutionHandled()) return;
+    if (r.url().startsWith(BASE) || r.url().startsWith('data:') || r.url().startsWith('blob:')) { void r.continue(); return; }
+    outside.push(r.url()); void r.abort();
+  };
+  page.on('request', onRequest);
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  check(await page.evaluate(() => navigator.onLine === false), 'journey: the reloaded page is offline');
+  check(JSON.stringify((await frames(page)).map((f) => f.title).sort()) === JSON.stringify(titles), `journey: offline reload, every board is back (got ${JSON.stringify((await frames(page)).map((f) => f.title))})`);
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: the SIM phones join again');
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on again');
+  const devicesId = await page.evaluate(() => window.__mcCanvas.frames().find((f) => JSON.stringify(window.__mcCanvas.snapshot().surfaces[f.id] ?? {}).includes('"source":"devices"'))?.id ?? null);
+  if (devicesId) await focusBoard(page, devicesId);
+  if (!(await say('offline', { review: true, offline: true }))) return;
+  check(outside.length === 0, `journey: offline, no request left this server (got ${JSON.stringify(outside.slice(0, 3))})`);
+  page.off('request', onRequest);
+  await page.setRequestInterception(false);
+  await page.removeScriptToEvaluateOnNewDocument(offlineScript.identifier);
+
+  // ---- back online: Kannada
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  if ((await page.evaluate(geminiCard)) === 'Offline') await page.evaluate(() => document.querySelector('[data-cmd=offline]').click());
+  if (!(await say('language', { review: true }))) return;
+  await waitFor(page, () => document.documentElement.lang === 'kn', 5_000, 'journey: the canvas is in Kannada').then((ok) => ok && check(true, 'journey: after Approve the canvas is in Kannada'));
+  await say('english');
+  await waitFor(page, () => document.documentElement.lang === 'en', 5_000, 'journey: back to English');
+
+  // ---- try to break it: an impossible level, and a tampered stored row
+  await page.evaluate(() => window.__mcCanvas.run('connect devices'));
+  await waitFor(page, () => document.querySelectorAll('.mc-paired-chip').length === 2, 10_000, 'journey: the SIM phones join for the last beats');
+  await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'journey: pairing moves on');
+  const lampBefore = await page.evaluate(lampState, LAMP_ID);
+  const breakMark = await page.evaluate(() => window.__mcCanvas.statusMark());
+  const sigBefore = await storeSig(page);
+  await say('break');
+  await waitFor(page, (m, l) => window.__mcCanvas.statusSince(m).some((t) => t.includes(l)), 10_000, 'journey: the 500 % request is refused', breakMark, LAMP_REFUSAL)
+    .then((ok) => ok && check(true, `journey: "${line('break')}" → "${LAMP_REFUSAL}"`));
+  await sleep(300);
+  check((await page.evaluate(lampState, LAMP_ID)) === lampBefore && !(await page.evaluate(reviewOpen)), 'journey: the lamp is unchanged and no review opened');
+  check(JSON.stringify(await storeSig(page)) === JSON.stringify(sigBefore), 'journey: the refused request changed nothing stored');
+  await page.evaluate((a) => window.__mcArtifacts.put(a), { ...CORRUPT_BOARD, id: 'board-tampered' });
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, (l) => document.body.innerText.includes(l), 5_000, 'journey: the tampered row is dropped and said', DROPPED_LINE)
+    .then((ok) => ok && check(true, 'journey: a tampered stored row is dropped and said; the rest load'));
+  check(JSON.stringify((await frames(page)).map((f) => f.title).sort()) === JSON.stringify(titles), 'journey: every good board is still there');
+  await page.evaluate(() => window.__mcArtifacts.remove('board-tampered'));
+
+  // ---- export, then import into an empty canvas
+  await page.evaluate(() => { const oc = URL.createObjectURL.bind(URL); URL.createObjectURL = (b) => { window.__mcExportBlob = b; return oc(b); }; });
+  await page.evaluate(() => { window.__mcCanvas.run('show artifacts'); });
+  if (!(await waitFor(page, () => !document.querySelector('.mc-artifacts-sheet')?.hidden && document.querySelectorAll('.mc-artifacts-row').length > 0, 5_000, 'journey: the Artifacts sheet lists what is stored'))) return;
+  const made = await page.evaluate(() => [...document.querySelectorAll('.mc-artifacts-sheet:not([hidden]) .mc-artifacts-made')].map((m) => m.textContent.trim()));
+  for (const m of made) labels.push(['artifacts sheet', m]);
+  await page.evaluate(() => document.querySelector('.mc-artifacts-export').click());
+  if (!(await waitFor(page, () => !!window.__mcExportBlob, 5_000, 'journey: Export writes a file'))) return;
+  const exported = await page.evaluate(() => window.__mcExportBlob.text());
+  const stored = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.map((a) => a.id).sort()));
+  const inFile = JSON.parse(exported).artifacts.map((a) => a.id).sort();
+  check(JSON.stringify(inFile) === JSON.stringify(stored), `journey: the export holds every stored artifact (${inFile.length})`);
+  check(!/token|192\.168\.|127\.0\.0\.1/i.test(exported), 'journey: the export holds no token and no address');
+  if (!(await open(page, 'fresh=1&sim=1&hands=0'))) return;
+  check((await frames(page)).length === 0 && (await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.length))) === 0, 'journey: a fresh canvas is empty before the import');
+  const tmp = join(require('node:os').tmpdir(), `mendcraft-journey-${process.pid}.json`);
+  require('node:fs').writeFileSync(tmp, exported);
+  try {
+    await page.evaluate(() => { window.__mcCanvas.run('show artifacts'); });
+    await waitFor(page, () => !document.querySelector('.mc-artifacts-sheet')?.hidden, 3_000, 'journey: the sheet opens on the empty canvas');
+    await (await page.$('.mc-artifacts-file')).uploadFile(tmp);
+    if (!(await waitFor(page, () => !document.querySelector('.mc-artifacts-confirm')?.hidden, 10_000, 'journey: the import asks first'))) return;
+    check(!(await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.length))), 'journey: nothing is written before Import');
+    await page.evaluate(() => document.querySelector('.mc-artifacts-do-import').click());
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => undefined);
+  } finally { require('node:fs').rmSync(tmp, { force: true }); }
+  await waitFor(page, () => !!window.__mcCanvas && !!window.__mcArtifacts, 20_000, 'journey: the canvas reopens after the import');
+  await waitFor(page, (n) => window.__mcCanvas.frames().length === n, 10_000, 'journey: every board is back after the import', titles.length)
+    .then((ok) => ok && check(true, 'journey: the import brings every board back'));
+
+  // ---- a last reload: everything is still there
+  if (!(await open(page, 'sim=1&hands=0'))) return;
+  await waitFor(page, (n) => window.__mcCanvas.frames().length === n, 10_000, 'journey: every board after the last reload', titles.length);
+  check(JSON.stringify((await frames(page)).map((f) => f.title).sort()) === JSON.stringify(titles), `journey: a final reload restores every board (got ${JSON.stringify((await frames(page)).map((f) => f.title))})`);
+  const finalIds = await page.evaluate(() => window.__mcArtifacts.list().then((l) => l.map((a) => a.id).sort()));
+  check(JSON.stringify(finalIds) === JSON.stringify(stored), `journey: the store holds what was exported (got ${JSON.stringify(finalIds)})`);
+  const k = await kinds(page);
+  check(k.board >= 1 && k.plan === 1 && k.connector === 1 && k.pack === 1 && k.steps >= 1, `journey: the store holds one artifact of each kind (got ${JSON.stringify(k)})`);
+  await waitFor(page, () => !!document.querySelector('mc-plan-board .mc-plan-board svg') && document.querySelectorAll('mc-device-tile').length >= 3, 10_000, 'journey: the drawing and the device tiles are back')
+    .then((ok) => ok && check(true, 'journey: the drawing and the device tiles are back'));
+  for (const h of await page.evaluate(frameHeads)) labels.push(['board head', h]);
+
+  // ---- across the whole run
+  check(reviews.length === JOURNEY_LINES.filter((l) => l.review).length && reviews.every((r) => r.unchanged && r.changed), `journey: every review appeared before its change (${JSON.stringify(reviews.map((r) => [r.beat, r.unchanged, r.changed]))})`);
+  const notReplay = labels.filter(([, l]) => !/Replay/.test(l ?? ''));
+  check(labels.length > 0 && notReplay.length === 0, `journey: every engine label says Replay (${labels.length} seen${notReplay.length ? `; not: ${JSON.stringify(notReplay)}` : ''})`);
+  const took = Date.now() - t0;
+  check(took < JOURNEY_MAX_MS, `journey: the whole journey took ${Math.round(took / 1000)} s (under ${JOURNEY_MAX_MS / 1000} s)`);
+}
+SECTIONS.journey = journey;
+
+/** Journey order (spec §10); the whole journey, on one page, last. */
+const ORDER = ['boot', 'phones', 'devices', 'dashboard', 'speaker', 'gimbal', 'connector', 'floorplan', 'phonelayout', 'persist', 'language', 'break', 'journey'];
+
 async function main() {
+  const unordered = Object.keys(SECTIONS).filter((n) => !ORDER.includes(n));
+  if (unordered.length) { console.error(`e2e-actual: sections missing from ORDER: ${unordered.join(', ')}`); return 2; }
   if (ONLY && !SECTIONS[ONLY]) { console.error(`e2e-actual: no section "${ONLY}" (have: ${Object.keys(SECTIONS).join(', ')}).`); return 2; }
   const chrome = findChrome();
   if (!chrome) { console.error('e2e-actual: no Chrome found (set CHROME_PATH).'); return 2; }
   let puppeteer;
   try { puppeteer = require('puppeteer-core'); } catch { console.error('e2e-actual: puppeteer-core missing (npm ci).'); return 2; }
   try { await fetch(`${BASE}/canvas.html`); } catch { console.error(`e2e-actual: no dev server at ${BASE} (start one: npx vite).`); return 2; }
-  const { replies, recorded } = loadReplies();
+  const fixtures = { written: loadReplies(WRITTEN), replies: loadReplies(REPLIES) };
   stayAwake();
   const browser = await puppeteer.launch({ executablePath: chrome, headless: 'new', args: ['--no-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check'] });
   try {
-    for (const [name, run] of Object.entries(SECTIONS)) {
+    for (const name of ORDER) {
+      const run = SECTIONS[name];
       if (ONLY && name !== ONLY) continue;
+      const { replies, recorded } = name === 'journey' ? fixtures.replies : fixtures.written;
       console.log(`--- ${name}`);
       const ctx = await browser.createBrowserContext();
       const page = await ctx.newPage();

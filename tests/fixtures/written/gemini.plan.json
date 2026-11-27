@@ -1,0 +1,10 @@
+{
+  "engine": "gemini",
+  "model": "none (hand-written)",
+  "turnKind": "plan",
+  "recordedAt": "2026-11-27T14:00:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live Gemini call was made for this task. A two-bedroom flat in the document shape PLAN_GENERATE_PROMPT asks for (rooms as rectangles in mm, doors and windows by room and side), wrapped in a code fence as models often do. scripts/e2e-actual.mjs, section floorplan, uses it for 'draw a two bedroom floor plan'. Re-record from a live run.",
+  "reply": "Here is the plan:\n```json\n{\n \"unit\": \"mm\",\n \"rooms\": [\n  {\n   \"name\": \"Bedroom 1\",\n   \"x\": 0,\n   \"y\": 3000,\n   \"w\": 4000,\n   \"h\": 3000\n  },\n  {\n   \"name\": \"Bedroom 2\",\n   \"x\": 4000,\n   \"y\": 3000,\n   \"w\": 4000,\n   \"h\": 3000\n  },\n  {\n   \"name\": \"Living room\",\n   \"x\": 0,\n   \"y\": 0,\n   \"w\": 4000,\n   \"h\": 3000\n  },\n  {\n   \"name\": \"Kitchen\",\n   \"x\": 4000,\n   \"y\": 0,\n   \"w\": 2000,\n   \"h\": 3000\n  },\n  {\n   \"name\": \"Bathroom\",\n   \"x\": 6000,\n   \"y\": 0,\n   \"w\": 2000,\n   \"h\": 3000\n  }\n ],\n \"doors\": [\n  {\n   \"room\": \"Living room\",\n   \"side\": \"s\",\n   \"width\": 900\n  },\n  {\n   \"room\": \"Bedroom 1\",\n   \"side\": \"s\",\n   \"width\": 800\n  },\n  {\n   \"room\": \"Bedroom 2\",\n   \"side\": \"s\",\n   \"width\": 800\n  },\n  {\n   \"room\": \"Kitchen\",\n   \"side\": \"w\",\n   \"width\": 800\n  },\n  {\n   \"room\": \"Bathroom\",\n   \"side\": \"w\",\n   \"width\": 700\n  }\n ],\n \"windows\": [\n  {\n   \"room\": \"Bedroom 1\",\n   \"side\": \"n\",\n   \"width\": 1200\n  },\n  {\n   \"room\": \"Bedroom 2\",\n   \"side\": \"n\",\n   \"width\": 1200\n  },\n  {\n   \"room\": \"Living room\",\n   \"side\": \"w\",\n   \"width\": 1000\n  },\n  {\n   \"room\": \"Kitchen\",\n   \"side\": \"s\",\n   \"width\": 1000\n  },\n  {\n   \"room\": \"Bathroom\",\n   \"side\": \"e\",\n   \"width\": 600\n  }\n ]\n}\n```"
+}

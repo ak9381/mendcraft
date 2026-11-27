@@ -1,0 +1,10 @@
+{
+  "engine": "nano",
+  "model": "none (hand-written)",
+  "turnKind": "break",
+  "recordedAt": "2026-11-27T08:30:00Z",
+  "promptSha": "",
+  "source": "hand-written",
+  "note": "Stop-gap: no live engine was available on this machine when it was written. The intent a model gives for \"set the lamp to 500 percent\" against the e2e fixture lamp (wiz-lamp-1): the out-of-range level, which the fixed limits refuse. Re-record from a live run.",
+  "reply": "{\"deviceId\":\"wiz-lamp-1\",\"brightness\":500}"
+}
