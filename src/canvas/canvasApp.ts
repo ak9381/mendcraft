@@ -94,7 +94,7 @@ import { mountPhoneMenu } from './phoneMenu';
 import { armedSurfaceAt, collectControls, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
 import { PLAN_EDIT_EVENT, flushPlanEdits, refreshPlanHands, type PlanEditDetail, type PlanHandSurface } from './planHandSurface';
 import { createPlanPeace, peaceHandsOf, type PeaceTarget } from './planPeace';
-import { coerceBoardDrawings, feedDrawings, planBoardIds, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
+import { canKeepPlanDrawing, coerceBoardDrawings, feedDrawings, planBoardIds, sanitizePlanDoc, setSavedPlanDoc, storedDrawings, type Drawings } from './planDocs';
 import { adjustLevel, LEVEL_STEP_PX } from './levelControl';
 import { mountPhoneHands } from './phoneHands';
 import { createGestureControl, type GestureControl } from './gestureControl';
@@ -1552,6 +1552,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const st = pb?.planState?.();
     const plan = surfaces[frameId];
     if (!st || !plan || !planTilesOf(plan).some((t) => t.boardId === st.boardId)) return;
+    // The loader's id rule and cap of 8 plans (planDocs.canKeepPlanDrawing),
+    // counted among this board's live plan tiles: a save never needs a repair.
+    const liveIds = new Set(planTilesOf(plan).map((t) => t.boardId));
+    if (!canKeepPlanDrawing(Object.keys(drawings[frameId] ?? {}).filter((id) => liveIds.has(id)), st.boardId)) return;
     const doc = sanitizePlanDoc(st.doc);
     if (!doc) return;
     (drawings[frameId] ??= {})[st.boardId] = doc;

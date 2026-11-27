@@ -16,6 +16,7 @@ import {
 import { initialDoc } from '../../src/canvas/firstOpen';
 import { connectedDevicesPlan, isDevicesPlan } from '../../src/canvas/connectedDevices';
 import { createDismissals } from '../../src/canvas/roomRebuild';
+import { canKeepPlanDrawing, storedDrawings } from '../../src/canvas/planDocs';
 
 /** Saved by a real ?sim=1 run: Connected devices, a dashboard with lamps +
  *  speaker + gimbal + connect, a floor plan with a reviewed edit (Study), the
@@ -127,6 +128,21 @@ describe('a repaired doc is copied aside first, and the repair is named', () => 
     expect(logs[0]).toMatch(/repaired on load/);
     expect(logs[0]).not.toMatch(/kept under/);
     expect(logs[0]).toMatch(/could not be kept/);
+  });
+  it('the saver keeps the loader rules (id, at most 8 plans): a saved doc loads with no repair', () => {
+    expect(canKeepPlanDrawing([], 'plan-1')).toBe(true);
+    expect(canKeepPlanDrawing([], 'BAD ID')).toBe(false);
+    const eight = Array.from({ length: 8 }, (_, i) => `p${i}`);
+    expect(canKeepPlanDrawing(eight, 'p9')).toBe(false);
+    expect(canKeepPlanDrawing(eight, 'p3')).toBe(true); // a redraw of one already kept
+    const d = JSON.parse(ALL_BOARDS);
+    const one = d.drawings.f3['f3-cad'];
+    const ids = [...Array.from({ length: 9 }, (_, i) => `p${i}`), 'BAD ID'];
+    const mem = { f3: Object.fromEntries(ids.map((id) => [id, one])) };
+    const stored = storedDrawings(mem, { f3: ids });
+    expect(Object.keys(stored.f3)).toEqual(eight);
+    const r = parseCanvasDocReport({ ...d, drawings: stored });
+    expect(r.repaired).toEqual([]);
   });
   it('a drawing coerceDrawings drops is listed among the repairs (and the raw text kept)', () => {
     const d = JSON.parse(ALL_BOARDS);

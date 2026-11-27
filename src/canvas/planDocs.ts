@@ -54,6 +54,16 @@ export function sanitizePlanDoc(raw: unknown): Record<string, unknown> | null {
   try { return JSON.stringify(out).length <= PLAN_DOC_MAX_CHARS ? out : null; } catch { return null; }
 }
 
+/** Plan board ids a stored drawing may have, and how many per board: the
+ *  saver and the loader share these, so a saved doc never needs a repair. */
+export const PLAN_BOARD_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const MAX_PLANS_PER_BOARD = 8;
+/** May a drawing for `boardId` be kept beside the `have` ones on that board? */
+export function canKeepPlanDrawing(have: readonly string[], boardId: string): boolean {
+  if (!PLAN_BOARD_ID.test(boardId)) return false;
+  return have.includes(boardId) || have.length < MAX_PLANS_PER_BOARD;
+}
+
 /** The `drawings` part of a stored canvas document: only for boards that
  *  exist, every drawing sanitized; anything off is dropped (never the boards). */
 export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>, dropped?: string[]): Drawings {
@@ -65,9 +75,9 @@ export function coerceDrawings(raw: unknown, frameIds: ReadonlySet<string>, drop
     if (!frameIds.has(frameId)) { dropped?.push(`drawings for missing board ${short(frameId)}`); continue; }
     if (!boards || typeof boards !== 'object' || Array.isArray(boards)) { dropped?.push(`drawings on ${short(frameId)}`); continue; }
     const entries = Object.entries(boards as Record<string, unknown>);
-    if (entries.length > 8) dropped?.push(`${entries.length - 8} drawings past 8 on ${short(frameId)}`);
-    for (const [boardId, doc] of entries.slice(0, 8)) {
-      const clean = /^[a-z0-9][a-z0-9-]{0,39}$/.test(boardId) ? sanitizePlanDoc(doc) : null;
+    if (entries.length > MAX_PLANS_PER_BOARD) dropped?.push(`${entries.length - MAX_PLANS_PER_BOARD} drawings past ${MAX_PLANS_PER_BOARD} on ${short(frameId)}`);
+    for (const [boardId, doc] of entries.slice(0, MAX_PLANS_PER_BOARD)) {
+      const clean = PLAN_BOARD_ID.test(boardId) ? sanitizePlanDoc(doc) : null;
       if (clean) (out[frameId] ??= {})[boardId] = clean;
       else dropped?.push(`drawing ${short(boardId)} on ${short(frameId)}`);
     }
@@ -93,7 +103,8 @@ export function storedDrawings(drawings: Drawings, live: Record<string, readonly
   for (const [frameId, ids] of Object.entries(live)) {
     for (const boardId of ids) {
       const doc = drawings[frameId]?.[boardId];
-      if (doc) (out[frameId] ??= {})[boardId] = doc;
+      // Same id rule and cap as the loader (coerceDrawings): no repair on load.
+      if (doc && canKeepPlanDrawing(Object.keys(out[frameId] ?? {}), boardId)) (out[frameId] ??= {})[boardId] = doc;
     }
   }
   return out;
