@@ -58,10 +58,13 @@ describe('connect devices again: phone A stays paired while phone B joins', () =
     await host.session.askWhoIsThere();
     await flush();
     expect(host.session.sid).toBe(sidBefore);
-    expect(await t.resolveAlias(host.rawCode)).toBe(host.token);
+    // A new window, a new code: the one A heard is dead.
+    expect(host.session.code).not.toBe(host.rawCode);
+    expect(await t.resolveAlias(host.rawCode)).toBeNull();
+    expect(await t.resolveAlias(host.session.code)).toBe(host.token);
 
     const b = phone(t, 'ios');
-    await b.link.joinWithCode(host.code, true);
+    await b.link.joinWithCode(host.session.code, true);
     await flush();
     expect(b.link.state()).toBe('connected');
     expect(a.link.state()).toBe('connected');

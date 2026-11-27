@@ -104,7 +104,7 @@ export function flagArrived(el: GlowFrame, later: (fn: () => void, ms: number) =
 // ---- arrival gate (phone) ---------------------------------------------------
 
 /** The laptop stamps a real board send (never a republish) with this. */
-export interface BoardSendMark { id: string; at: number }
+export interface BoardSendMark { id: string; at: number; /** The host's hello re-send of an old snapshot. */ replay?: true }
 
 export interface ArrivalStore { getItem(k: string): string | null; setItem(k: string, v: string): void }
 
@@ -130,7 +130,9 @@ export function createArrivalGate(storage: ArrivalStore | null): ArrivalGate {
       if (mark.id === last) return false; // a replay / republish of the same send
       last = mark.id; // seen: even a stale one never lights later
       try { storage?.setItem(ARRIVAL_KEY, mark.id); } catch { /* memory only */ }
-      if (opts.live) return true; // arrived just now over the relay
+      // Arrived just now over the relay — unless it is the host re-sending an
+      // old snapshot to a phone that said hello (marked replay): age-checked.
+      if (opts.live && mark.replay !== true) return true;
       return Number.isFinite(mark.at) && Math.abs(now - mark.at) <= ARRIVAL_MAX_AGE_MS;
     },
   };

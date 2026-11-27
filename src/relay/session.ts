@@ -20,7 +20,7 @@ import {
   type GimbalModeKind,
   type GimbalCueKind,
   generateRoomToken,
-  shortCodeOf,
+  generatePairCode,
   type MusicStatus,
   type PairState,
   type RandomBytes,
@@ -33,7 +33,7 @@ import {
   type PrivacyAsk,
   type PrivacyReply,
 } from './protocol';
-import { coerceSnapshot, type ControlSnapshot } from './controlSnapshot';
+import { coerceSnapshot, markReplay, type ControlSnapshot } from './controlSnapshot';
 import type { RelayMeta, RelayTransport } from './transport';
 
 export interface RelayFrame {
@@ -50,6 +50,8 @@ interface SessionBase {
 
 export interface HostSession extends SessionBase {
   readonly token: string;
+  /** The short code of the CURRENT admission window: its own random secret
+   *  (never derived from the token), new each time a window opens. */
   readonly code: string;
   onCommand(cb: (cmd: RelayCommand) => void): void;
   onFrame(cb: (frame: RelayFrame) => void): void;
@@ -251,6 +253,16 @@ function makeCore(role: RelayRole, transport: RelayTransport, roomId: string) {
   };
 }
 
+/** One network step of opening or joining a room (writing the code, the
+ *  first hello, resolving a code) that takes longer than this is given up:
+ *  the caller says it needs the network instead of "Joining…" for ever. */
+export const RELAY_STEP_TIMEOUT_MS = 15_000;
+function inTime<T>(p: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('relay: no answer from the room')), RELAY_STEP_TIMEOUT_MS); });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
 /** Pings that do not name this session: at most this many answers per gap
  *  (a phone rejoining right away is answered; a replayed history is not). */
 export const UNSIGNED_PING_GAP_MS = 1500;
@@ -262,6 +274,12 @@ export const UNSIGNED_PING_BURST = 3;
  *  joins. State-changing session actions always address the room by its
  *  full 24-char token, never the short code, once a session is established. */
 export const ALIAS_TTL_MS = 5 * 60 * 1000;
+
+/** Phone asks the laptop runs through Gemini (each costs quota): at most this
+ *  many per PRIVACY_ASK_WINDOW_MS per host session, each jobId once. */
+export const PRIVACY_ASK_MAX = 6;
+export const PRIVACY_ASK_WINDOW_MS = 60_000;
+const PRIVACY_JOBS_KEPT = 64;
 
 export interface CreateHostOptions {
   /** Resume an EXISTING room token (e.g. one a remembered phone is still pointed
@@ -283,7 +301,9 @@ export async function createHostSession(
   const token = opts.token && RESUME_TOKEN_RE.test(opts.token)
     ? opts.token
     : generateRoomToken(random);
-  const code = shortCodeOf(token);
+  // The short code is a separate secret (crypto random, whatever `random` is):
+  // the token can't be worked out from it, and it changes with each window.
+  let code = generatePairCode();
   const core = makeCore('host', transport, token);
   const sid = Array.from(random(6), (b) => (b % 36).toString(36)).join('') + Date.now().toString(36);
   const now = opts.now ?? (() => Date.now());
@@ -314,6 +334,12 @@ export async function createHostSession(
     admitting = false;
     await transport.clearAlias(code).catch(() => undefined);
   }
+  /** Open a window: a code that is still open is kept (the card shows it); a
+   *  retired one is replaced by a new code — an old code never comes back. */
+  function openWindow(): void {
+    if (aliasCleared) code = generatePairCode();
+    aliasCleared = false;
+  }
   let aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
   let commandCb: ((cmd: RelayCommand) => void) | null = null;
   let frameCb: ((frame: RelayFrame) => void) | null = null;
@@ -321,6 +347,8 @@ export async function createHostSession(
   let runCb: ((run: RelayRunRequest) => void) | null = null;
   let runControlCb: ((control: RelayRunControl) => void) | null = null;
   let privacyAskCb: ((ask: PrivacyAsk) => void) | null = null;
+  let privacyAskAt: number[] = [];
+  const privacyJobs = new Set<string>();
   const cueLimiter = createCueLimiter(undefined, opts.now);
   let cueInflight = false;
   const modeLimiter = createModeLimiter(undefined, undefined, opts.now);
@@ -354,13 +382,25 @@ export async function createHostSession(
       return;
     }
     if (msg.type === 'privacyAsk') {
-      privacyAskCb?.(msg.ask);
+      // Each ask spends Gemini quota on this laptop: only a phone paired in
+      // this session (history never gets here — see makeCore), each job
+      // once, and at most PRIVACY_ASK_MAX a minute. A dropped ask is not
+      // answered (the phone times out and says so).
+      if (core.state !== 'paired' || !privacyAskCb) return;
+      if (privacyJobs.has(msg.ask.jobId)) return;
+      const t = now();
+      privacyAskAt = privacyAskAt.filter((at) => t - at < PRIVACY_ASK_WINDOW_MS);
+      if (privacyAskAt.length >= PRIVACY_ASK_MAX) return;
+      privacyAskAt.push(t);
+      privacyJobs.add(msg.ask.jobId);
+      if (privacyJobs.size > PRIVACY_JOBS_KEPT) privacyJobs.delete(privacyJobs.values().next().value as string);
+      privacyAskCb(msg.ask);
       return;
     }
     if (msg.from === 'control') {
       // A read-only dashboard, not a remote: never changes pairing. Replay the
       // latest state so it populates immediately.
-      if (msg.type === 'hello' && lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (msg.type === 'hello' && lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
       return;
     }
     if (msg.type === 'hello') {
@@ -380,7 +420,7 @@ export async function createHostSession(
       // Replay the latest state so a phone (freshly joined or reloaded) populates
       // its board/layout immediately — today this only happened for a control
       // hello, which stranded a late-joining phone until the next change.
-      if (lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
     } else if (msg.type === 'bye') {
       core.setState(advancePair(core.state, 'peer-bye'));
     } else if (msg.type === 'cmd' && msg.cmd.kind === 'ping') {
@@ -415,11 +455,15 @@ export async function createHostSession(
   // history and never acts.
   const whoMsg: RelayMessage = { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } };
   void core.markStart(() => (transport.publishStamped ? transport.publishStamped(token, whoMsg) : transport.publish(token, whoMsg)));
-  await transport.setAlias(code, token);
+  try { await inTime(transport.setAlias(code, token)); } catch (e) {
+    clearTimeout(aliasTimer);
+    await core.close({ silent: true });
+    throw e;
+  }
 
   return {
     token,
-    code,
+    get code() { return code; },
     sid,
     setAttention: (get) => { attentionGet = get; },
     sendAttention: (who) => {
@@ -485,8 +529,8 @@ export async function createHostSession(
     admitMore: async () => {
       if (core.isClosed()) return;
       clearTimeout(aliasTimer);
+      openWindow();
       admitting = true;
-      aliasCleared = false;
       aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
       await transport.setAlias(code, token);
       // A fresh host message vouches for the reopened code (resolveRoomId
@@ -600,7 +644,11 @@ export async function createGuestSession(
   // board, an old gimbal cue or an old point request in the room never acts.
   const helloMsg: RelayMessage = { v: 1, from: 'phone', type: 'hello' };
   const hello = (): Promise<void | RelayMeta> => (transport.publishStamped ? transport.publishStamped(roomId, helloMsg) : transport.publish(roomId, helloMsg));
-  const first = await hello();
+  let first: void | RelayMeta;
+  try { first = await inTime(hello()); } catch (e) {
+    await core.close({ silent: true });
+    throw e;
+  }
   if (first) void core.markStart(hello, first); else core.setStart(null);
 
   return {
@@ -735,7 +783,7 @@ export async function resolveRoomId(
   opts: { now?: () => number } = {},
 ): Promise<string | null> {
   if (input.kind === 'token') return input.token;
-  const room = await transport.resolveAlias(input.code);
+  const room = await inTime(transport.resolveAlias(input.code));
   if (!room || !transport.aliasFreshAt) return room;
   const at = await transport.aliasFreshAt(input.code, room).catch(() => null);
   const now = (opts.now ?? Date.now)();

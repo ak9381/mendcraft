@@ -78,3 +78,23 @@ describe('ArtifactStore', () => {
     expect(r.persistent).toBe(true);
   });
 });
+
+describe('I4: a closed IndexedDB connection is opened again', () => {
+  it('a put after the connection closed under it re-opens and saves', async () => {
+    const idb = new IDBFactory();
+    const dbs: IDBDatabase[] = [];
+    const spy = {
+      open: (name: string, v?: number) => {
+        const req = idb.open(name, v);
+        req.addEventListener('success', () => dbs.push(req.result));
+        return req;
+      },
+    } as unknown as IDBFactory;
+    const s = createIdbArtifactStore(spy);
+    await s.put(board('f1'));
+    dbs[0].close(); // the connection went away (an app backgrounded, a storage reset)
+    await s.put(board('f2'));
+    expect((await s.list()).map((a) => a.id).sort()).toEqual(['board-f1', 'board-f2']);
+  });
+});
+

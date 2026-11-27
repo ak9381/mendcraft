@@ -38,25 +38,41 @@ export function createIdbArtifactStore(
   function open(): Promise<IDBDatabase> {
     if (!idb) return Promise.reject(new Error('no IndexedDB'));
     if (!opened) {
-      opened = new Promise<IDBDatabase>((resolve, reject) => {
+      const mine: Promise<IDBDatabase> = new Promise<IDBDatabase>((resolve, reject) => {
         const req = idb.open(ARTIFACT_DB_NAME, 1);
         req.onupgradeneeded = () => {
           const db = req.result;
           if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('kind', 'kind');
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          // A connection the browser closed (storage cleared, the app put
+          // away) or another tab upgrading: forget it, the next call reopens.
+          db.onclose = () => { if (opened === mine) opened = null; };
+          db.onversionchange = () => { db.close(); if (opened === mine) opened = null; };
+          resolve(db);
+        };
         req.onerror = () => reject(req.error ?? new Error('IndexedDB open failed'));
         req.onblocked = () => reject(new Error('IndexedDB open blocked'));
       });
+      opened = mine;
       // A failed open may succeed later (another tab closed): try again next call.
-      opened.catch(() => { opened = null; });
+      mine.catch(() => { if (opened === mine) opened = null; });
     }
     return opened;
   }
-  async function tx<T>(mode: IDBTransactionMode, work: (s: IDBObjectStore) => IDBRequest | null, result?: (r: IDBRequest | null) => T): Promise<T> {
+  /** A transaction on the open connection; one that has closed under us
+   *  (transaction() throws) is dropped and opened once more. */
+  async function begin(mode: IDBTransactionMode): Promise<IDBTransaction> {
     const db = await open();
+    try { return db.transaction(STORE, mode); } catch {
+      opened = null;
+      return (await open()).transaction(STORE, mode);
+    }
+  }
+  async function tx<T>(mode: IDBTransactionMode, work: (s: IDBObjectStore) => IDBRequest | null, result?: (r: IDBRequest | null) => T): Promise<T> {
+    const t = await begin(mode);
     return new Promise<T>((resolve, reject) => {
-      const t = db.transaction(STORE, mode);
       const req = work(t.objectStore(STORE));
       t.oncomplete = () => resolve(result ? result(req) : (undefined as T));
       t.onerror = () => reject(t.error ?? new Error('IndexedDB write failed'));
