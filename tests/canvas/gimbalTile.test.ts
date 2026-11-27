@@ -13,6 +13,7 @@ import { createUnreachableLampConnector, createWizAwareConnector, LAMP_NOT_REACH
 import { applyRealLamps, rememberedLamps } from '../../src/canvas/realLamps';
 import { pointConnectFromIdentity } from '../../src/canvas/connectTurns';
 import { DeviceError } from '../../src/canvas/deviceActions';
+import { BridgeOfflineError } from '../../src/devices/wizClient';
 
 const src = (p: string): string => readFileSync(new URL(`../../src/${p}`, import.meta.url), 'utf8');
 
@@ -121,7 +122,7 @@ describe('review fixes: bridge drop and recovery, stale gimbal status', () => {
   it('the bridge dropping mid-session reports once; a refused press asks for a re-check', async () => {
     let down = 0, refused = 0;
     const status = { up: true };
-    const client = { setPilot: async () => { throw new Error('ECONNREFUSED'); } } as never;
+    const client = { setPilot: async () => { throw new BridgeOfflineError(); } } as never;
     const c = createWizAwareConnector({ client, fallback: { run: async () => ({}) }, status, honest: true, onDown: () => { down++; }, onRefusedUnreachable: () => { refused++; } });
     await expect(c.run({ deviceId: 'wiz-lamp-1', on: true })).rejects.toThrow(LAMP_NOT_REACHABLE);
     expect(status.up).toBe(false);

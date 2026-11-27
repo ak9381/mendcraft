@@ -20,7 +20,7 @@ import { impossibleAttempt } from '../../src/canvas/tryToBreak';
 import { createWizAwareConnector, wizIntentFor } from '../../src/canvas/wizDevices';
 import { focusWholeBoard, ROOM_MIN_Z } from '../../src/canvas/camera';
 import { fitFocusedSize, ROOM_MAX_W } from '../../src/canvas/canvasApp';
-import { BridgeRefusedError, createWizClient, type WizClient } from '../../src/devices/wizClient';
+import { BridgeOfflineError, BridgeRefusedError, createWizClient, type WizClient } from '../../src/devices/wizClient';
 import { WIZ_SCENES, isWizScene, pilotParamsForIntent } from '../../src/devices/wiz';
 import { SCENE_ID_MAX, validateParams } from '../../scripts/wizBridge.lib.mjs';
 
@@ -179,7 +179,7 @@ describe('lamp intents reach the bulb as the right setPilot params', () => {
     const ack = await r.c.run({ deviceId: 'wiz-lamp-7', on: true, sceneId: 16 });
     expect(r.client.setPilot).not.toHaveBeenCalled();
     expect(ack).toMatchObject({ on: true, sceneId: 16, sim: true });
-    const dropped = rig(async () => { throw new Error('socket hang up'); });
+    const dropped = rig(async () => { throw new BridgeOfflineError(); });
     expect(await dropped.c.run({ deviceId: 'wiz-lamp-7', on: true, rgb: { r: 255, g: 0, b: 0 } })).toMatchObject({ color: '#ff0000', sim: true });
     expect(dropped.status.up).toBe(false);
   });
