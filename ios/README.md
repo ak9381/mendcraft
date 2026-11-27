@@ -1,29 +1,65 @@
-# Mendcraft iOS (Capacitor) — skeleton
+# Mendcraft iOS (Capacitor)
 
-This directory is a **placeholder**. No `.ipa` was built and no Xcode project is
-committed here — the Capacitor iOS platform can only be generated and built on a
-**Mac with Xcode + CocoaPods**, not on this Linux box. Nothing here pretends
-otherwise.
+The Xcode project (`ios/App`) is **generated, not committed**: `npx cap add ios`
+writes it on a Mac with Xcode, and it then holds your signing team
+(`DEVELOPMENT_TEAM`). Never commit `ios/App`. Everything Mendcraft adds to it
+is tracked elsewhere and copied in:
+
+- `ios-src/*.swift` — the native plugins, the view controller and the scene delegate;
+- `ios-src/Info.plist.additions.xml` — the Info.plist keys and permission
+  strings (camera, microphone incl. the pairing chime, speech recognition,
+  local network / Bonjour, the scene manifest).
 
 The iPhone experience ships two ways:
 
-1. **PWA (works today, no Mac needed).** Open the deployed site in iPhone Safari,
-   go to `/phone`, then **Share → Add to Home Screen**. You get a standalone
-   lamp & music remote. This is the recommended path.
-2. **Native wrapper (optional, needs a Mac).** A thin Capacitor shell around the
-   same `dist/` bundle, routing to `/phone`. Generate it on a Mac:
+1. **PWA (no Mac needed).** Open the deployed site in iPhone Safari, go to
+   `/phone`, then **Share → Add to Home Screen** for a standalone lamp & music
+   remote.
+2. **Native app (needs a Mac with Xcode + CocoaPods).** A Capacitor shell
+   around the same `dist/` bundle.
 
-   ```sh
-   npm install
-   npm run build            # produces dist/
-   npx cap add ios          # generates ios/App (Xcode project) — overwrites this skeleton
-   npx cap sync ios
-   npx cap open ios         # opens Xcode; set a signing team, then Run/Archive
-   ```
+## Build the native app (after a fresh clone)
 
-   `@capacitor/ios` is already in `package.json`, and `capacitor.config.ts` has
-   an `ios` section. Build artifacts (`ios/App/Pods`, `ios/App/build`,
-   `DerivedData`, etc.) are git-ignored — see the repo `.gitignore`.
+```sh
+npm ci
+npm run build                 # produces dist/
+npm run ios:setup             # scripts/ios-setup.mjs (below)
+npx cap open ios              # pick your signing team, then Run on the iPhone
+```
+
+`npm run ios:setup` does, every time, what used to be done by hand:
+
+1. `ios/App` missing → `npx cap add ios` (the tracked `ios/README.md` and
+   `ios/plugins/` are set aside meanwhile; Capacitor refuses to add a platform
+   whose folder exists).
+2. Copies `ios-src/*.swift` (the LAN, gimbal and Apple on-device plugins, the
+   view controller that registers them, the scene delegate that roots the
+   window in it) into `ios/App/App/` and puts each in the **App** target.
+3. Merges `ios-src/Info.plist.additions.xml` into `ios/App/App/Info.plist`
+   (camera, microphone, speech recognition, local network / Bonjour, the scene
+   manifest).
+4. `npx cap sync ios`.
+5. Checks: every copy byte-identical to `ios-src`, in the target, and no old
+   copy still calling `requestSystemTrackingOff`.
+
+An `ios/App` from an older checkout: delete it (`rm -rf ios/App`) and run
+`npm run ios:setup` again; you then pick the signing team once more.
+
+Compile check without a phone or signing:
+
+```sh
+xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+  -destination 'generic/platform=iOS' -derivedDataPath /tmp/mc-ios-dd \
+  CODE_SIGNING_ALLOWED=NO build && rm -rf /tmp/mc-ios-dd
+```
+
+The custom plugins are not in `packageClassList` (that lists npm plugins
+only): `MendcraftViewController.capacitorDidLoad` registers them with
+`registerPluginInstance`. A bare `CAPBridgeViewController` never does.
+
+`ios/README.md` and `ios-src/` are committed; the generated project and all
+build output are git-ignored (see the repo `.gitignore`). Keep `.bak` copies
+of Info.plist or the project out of git.
 
 ## iOS limits (by design)
 
@@ -39,12 +75,10 @@ The iPhone experience ships two ways:
 - **Lamp control** needs the laptop's WiZ bridge (`npm run wiz-bridge`) reachable
   on the same Wi-Fi/LAN as the phone.
 
-## Add-a-device native plugins (`ios/plugins/`, not compiled yet)
+## Native plugins (`ios-src/`)
 
-Written on the Linux build box, **not compiled or run** — no Mac/Xcode here and
-the gimbal hasn't arrived. After `npx cap add ios`, drag the three files into
-the `App` target and set the Main storyboard's view controller class to
-`MendcraftViewController`.
+Copied into `ios/App/App` by the steps above. See `ios-src/README.md` for
+the Xcode details, including Apple on-device AI.
 
 - `MendcraftLanPlugin.swift` — UDP/HTTP to private LAN IPs only (same port
   allowlist as `src/devices/connector.ts`), WiZ broadcast discovery, Bonjour
@@ -53,10 +87,16 @@ the `App` target and set the Main storyboard's view controller class to
   `com.apple.developer.networking.multicast` entitlement (Apple must approve it)
   for the broadcast.
 - `MendcraftGimbalPlugin.swift` — **optional** DockKit aiming (Insta360 Flow 2
-  Pro). Follow me uses DockKit's own system tracking; Hold still turns it off;
-  "Follow my hands" runs a native front-camera Vision hand tracker that drives
-  `DockAccessory.track()` (the WebView camera is off meanwhile). Nod, shake
-  and wake-up cues; manual pan/tilt with `setOrientation(relative:)`. iOS 18+,
-  behind `#if canImport(DockKit)`; reports `available:false` otherwise.
-  Nothing in the flow requires it.
-- `MendcraftViewController.swift` — registers both plugins.
+  Pro). System face tracking is turned **off** on launch, on resume
+  (`didBecomeActive`), when a stand docks, and from `viewDidAppear`. Manual
+  pan/tilt with `setOrientation(relative:)`. iOS 18+, behind
+  `#if canImport(DockKit)`; reports `available:false` otherwise. Nothing in
+  the flow requires it. "Follow my hands" runs a native front-camera Vision
+  hand tracker that drives `DockAccessory.track()` (the WebView camera is off
+  meanwhile); in Add a device she can point or nudge and then it holds the frame.
+- `MendcraftViewController.swift` — registers the plugins and re-asserts
+  system tracking off on appear.
+- `MendcraftAppleAIPlugin.swift` — on-device Apple Foundation Models
+  (Apple Intelligence) for Quick draft, small edits, intent and redaction.
+  iOS 26+, behind `#if canImport(FoundationModels)`; reports
+  `unsupported` otherwise. No Firebase iOS SDK. See `ios-src/README.md`.
