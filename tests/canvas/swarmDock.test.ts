@@ -76,6 +76,9 @@ class El {
   querySelector(sel: string): El | null { return findAll(this, sel)[0] ?? null; }
 }
 
+/** Every text run under an element, in order. */
+function textOf(e: El): string { return [e.textContent, ...e.children.map(textOf)].join(' '); }
+
 /** Just enough HTML→El parsing for swarmDock.ts's two static `innerHTML`
  *  templates (the mini terminal shell, the dock chip) — nested tags with
  *  `class="..."`/other attrs and a bare boolean `hidden`; text runs are
@@ -299,8 +302,8 @@ describe('mountSwarmDock — mini terminal', () => {
     chip.dispatch('click', chip);
     const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
     const lines = mini.querySelector('.mc-term-lines')!;
-    expect(lines.innerHTML).toContain('Dashboard for [Client A]: bulb, plug');
-    expect(lines.innerHTML).not.toMatch(/Sharma/);
+    expect(textOf(lines)).toContain('Dashboard for [Client A]: bulb, plug');
+    expect(textOf(lines)).not.toMatch(/Sharma/);
   });
 
   it('omits the payload line for an engine that made no real call this turn', () => {
@@ -311,7 +314,22 @@ describe('mountSwarmDock — mini terminal', () => {
     const chip = aiPanel.querySelector('.mc-term-dock[data-engine="nano"] .mc-term-dock-chips')!.children[0];
     chip.dispatch('click', chip);
     const mini = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!;
-    expect(mini.querySelector('.mc-term-lines')!.innerHTML).not.toContain('received');
+    expect(textOf(mini.querySelector('.mc-term-lines')!)).not.toContain('received');
+  });
+
+  it('the payload line is text, never markup: a prompt that says <script> or <img> shows it whole (final review I11)', () => {
+    const aiPanel = buildAiPanel();
+    const root = new El('div');
+    const dock = mountSwarmDock(aiPanel as unknown as HTMLElement, root as unknown as HTMLElement, { doc: fakeDoc, ...immediateTimers() });
+    const payload = 'visual.markup: no <script>, no <img src=x onerror=alert(1)> — Lamp <b>bold</b>';
+    dock.start([agent('real-0', 'gemini', 'Gemini · planner')], { reducedMotion: true, payloads: { gemini: payload } });
+    const chip = aiPanel.querySelector('.mc-term-dock[data-engine="gemini"] .mc-term-dock-chips')!.children[0];
+    chip.dispatch('click', chip);
+    const lines = root.children.find((c) => c.classSet.has('mc-mini-terminal'))!.querySelector('.mc-term-lines')!;
+    expect(lines.innerHTML).toBe('');
+    expect(textOf(lines)).toContain(payload);
+    const tags = (e: El): string[] => e.children.flatMap((c) => [c.tag, ...tags(c)]);
+    expect(tags(lines).filter((x) => !['p', 'span'].includes(x))).toEqual([]);
   });
 
   it('tapping the same chip again closes it; tapping another switches', () => {

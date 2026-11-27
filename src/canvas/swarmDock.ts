@@ -103,8 +103,21 @@ export function mountSwarmDock(aiPanel: HTMLElement, root: HTMLElement, opts: Sw
     if (!openId) return;
     const rec = records.get(openId);
     if (!rec) return;
-    miniLines.innerHTML = rec.lines.map((l) =>
-      `<p class="mc-term-line"><span class="mc-term-time">${l.time}</span><span class="mc-term-detail">${l.text}</span></p>`).join('');
+    // Text only: the "received" line is the exact prompt that left, and it
+    // can say "<script>" or carry her words (final review I11).
+    miniLines.textContent = '';
+    for (const l of rec.lines) {
+      const p = doc.createElement('p');
+      p.className = 'mc-term-line';
+      const time = doc.createElement('span');
+      time.className = 'mc-term-time';
+      time.textContent = l.time;
+      const detail = doc.createElement('span');
+      detail.className = 'mc-term-detail';
+      detail.textContent = l.text;
+      p.append(time, detail);
+      miniLines.appendChild(p);
+    }
   }
 
   function setMiniCursor(working: boolean): void {
