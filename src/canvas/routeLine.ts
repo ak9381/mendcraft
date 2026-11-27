@@ -174,7 +174,7 @@ export function routeLine(text: string, world: RouteWorld): Route {
   if (cmd) return { name: 'canvas', cmd };
   // "play <something>" on a speaker: a search for the speaker connector.
   const mi = parseMusicIntent(text);
-  const query = mi?.type === 'searchPlay' && !world.sim ? spotifySearchQuery(mi.query, !!world.spotifyConnected) : null;
+  const query = mi?.type === 'searchPlay' && !world.sim && !PLAY_NOT_MUSIC.test(mi.query) ? spotifySearchQuery(mi.query, !!world.spotifyConnected) : null;
   const speaker = query ? world.devices.find((d) => d.kind === 'music') : undefined;
   if (query && speaker) return { name: 'musicSearch', query, deviceId: speaker.id };
   const result = parseDeviceCommands(text, world.devices, { pointed: world.pointed ?? null });
