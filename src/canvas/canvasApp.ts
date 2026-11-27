@@ -1448,8 +1448,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     stepsAsking = true;
     const log = (line: string) => panels.forEngine(engine.id).log('note', line);
     try {
-      const prompt = stepsPrompt(at, facts);
-      const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200 });
+      // A cloud steps call (no Nano here) is redacted and booked in the
+      // ledger like every other turn (final review I8); Nano's stays here.
+      const cloud = engine.id === 'gemini';
+      const asked = stepsPrompt(at, facts);
+      const prompt = cloud ? protectTurn('', asked).promptText : asked;
+      const why = 'Gemini · cloud — no Nano here, so Deep wrote the next steps (counts only, no names)';
+      const si: SentInfo = { engine: engine.id, prompt, sent: cloud ? 'the step she is at and how many devices, boards and phones' : null, routeLine: engine.routeLine ?? (engine.sim ? `SIM · ${why}` : why), sim: engine.sim };
+      if (cloud && !engine.sim) openCloudTurn(si, prompt);
+      else if (cloud) recordSent(si, prompt);
+      const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200, ...(cloud ? { onCloudSend: () => cloudSent(si), onCloudRetract: () => cloudRetract(si) } : {}) });
       const raw = extractJson(full);
       // The step is ours, not the reply's: what she is at decides where they show.
       const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at, sig } : raw, { isKnownAsk });
