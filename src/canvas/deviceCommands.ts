@@ -51,9 +51,48 @@ const curBright = (d: DeviceRef) => (typeof d.brightness === 'number' ? d.bright
 const curVol = (d: DeviceRef) => (typeof d.volume === 'number' ? d.volume : 50);
 const labelList = (ds: readonly DeviceRef[], all: boolean) => (all ? 'everything' : ds.map((d) => d.label).join(' and '));
 
+// ── Command shape ────────────────────────────────────────────────────────────
+// A device route acts at once, with no review, so only a COMMAND may reach it.
+// A line that merely talks about a device (a question, a negation, a report or
+// claim, a tile on a board) is refused here and falls through to chat.
+
+/** Polite openers stripped before the shape check ("please", "hey", "can you"). */
+const POLITE = /^(?:(?:please|pls|hey|hi|ok|okay|alright|now|just|so|and|then|also|mendcraft|can you|could you|would you|will you|kindly)\s+)+/;
+/** Imperative verbs a device command may start with. */
+const IMPERATIVE = /^(?:turn|switch|put|set|make|dim|brighten|darken|lower|raise|increase|decrease|reduce|boost|cut|play|resume|pause|stop|next|skip|previous|go back|change|bring|warm|cool|lights?|volume|mute|unmute)\b/;
+/** Question openers: "is the lamp on", "why does the music stop". */
+const QUESTION_START = /^(?:is|isnt|are|arent|am|was|wasnt|were|werent|why|what|whats|how|hows|which|who|whos|whom|whose|when|where|wheres|does|doesnt|do|did|didnt|can|cant|could|would|will|wont|should|shall|may|might|has|have|had)\b/;
+/** Negations: "don't turn the lamp off" must not turn it off. */
+const NEGATION = /\b(?:dont|do not|never|not|cant|cannot|wont|shouldnt|doesnt|didnt|isnt|arent|wasnt|without)\b/;
+/** Reports and claims: "tell me the lamp is on", "I turned it on, right". */
+const REPORT = /\b(?:tell|told|say|said|says|already|explain|remember|story|wonder|think|suppose|pretend|imagine|draw|describe)\b|\bright$|\b(?:is|are|am|was|were|been|being|its|thats|theres|went|goes|turned|switched|dimmed|brightened|paused|played|stopped|skipped|changed|made|depend|depends)\b/;
+/** Things on a board, not a device: "put a lamp tile on the board". */
+const NOT_A_DEVICE = /\b(?:tile|tiles|board|boards|card|cards|widget|widgets|button|buttons|control|controls|slider|sliders|panel|panels|dashboard|dashboards|icon|icons|picture|photo|image|drawing|sketch|diagram|page|screen|note|notes)\b/;
+/** Sentences with a person as subject are reports, not commands ("I depend on the lamp"). */
+const SUBJECT_START = /^(?:i|im|ive|id|we|were|you|youre|he|she|they|it|there|this|that|these|those|who)\b/;
+const SHORT_PHRASE_WORDS = 5;
+
+/** True when the line has the shape of a device command (see above). */
+export function looksLikeDeviceCommand(text: string): boolean {
+  const raw = text.trim();
+  const t = norm(raw);
+  if (!t) return false;
+  const politeModal = /^(?:(?:please|hey|ok|okay|now|just)\s+)*(?:can|could|would|will) you\b/.test(t);
+  const core = t.replace(POLITE, '').trim();
+  if (!core) return false;
+  // A "?" makes it a question, except a polite request ("can you turn the lamp on?").
+  if (raw.includes('?') && !(politeModal && IMPERATIVE.test(core))) return false;
+  if (!politeModal && QUESTION_START.test(t)) return false;
+  if (NEGATION.test(t) || REPORT.test(t) || NOT_A_DEVICE.test(t)) return false;
+  if (IMPERATIVE.test(core)) return true;
+  // "lamp on", "lights off", "desk lamp 40 percent", "music louder", "next song".
+  return !SUBJECT_START.test(core) && core.split(' ').length <= SHORT_PHRASE_WORDS;
+}
+
 export function parseDeviceCommands(text: string, devices: readonly DeviceRef[], opts?: { pointed?: DeviceRef | null }): DeviceCommandResult | null {
   const t = norm(text);
   if (!t || !devices.length) return null;
+  if (!looksLikeDeviceCommand(text)) return null;
 
   // Music is a separate vocabulary (play / pause / next / louder / softer) and
   // targets the music devices; lamp verbs never touch a speaker.
