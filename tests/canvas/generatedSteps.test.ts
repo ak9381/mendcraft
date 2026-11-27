@@ -4,7 +4,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  coerceNextSteps, createNextStepChips, MAX_NEXT_STEPS, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type ShownSteps,
+  coerceNextSteps, createNextStepChips, MAX_NEXT_STEPS, plainStep, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type ShownSteps,
 } from '../../src/canvas/nextSteps';
 import { coerceArtifact } from '../../src/artifacts/artifact';
 import type { JourneyStep } from '../../src/canvas/journey';
@@ -52,6 +52,42 @@ describe('coerceNextSteps', () => {
     expect(p).toContain('"devices" step');
     expect(p).toContain('Devices here: 3. Boards: 2. Paired phones: 2.');
     expect(p).toMatch(/\{"steps":\[\{"id":string,"label":string,"say":string\}\]\}/);
+  });
+  it('the prompt asks for short commands she could say, with examples', () => {
+    const p = stepsPrompt('dashboard', { devices: 2, boards: 1, phones: 0 });
+    expect(p).toContain('"Play music"');
+    expect(p).toMatch(/4 words at most/);
+    expect(p).toMatch(/Never describe the canvas in a label/);
+  });
+});
+
+describe('chips are plain commands and known asks (live: "Play board music")', () => {
+  const known = (say: string) => /^(play music|play some music|show my devices|draw a( two bedroom)? floor plan|build the dashboard|connect a device|save this board)$/i.test(say);
+  it('plainStep: short, every label word in what it says, no "board" adjective', () => {
+    expect(plainStep({ label: 'Play music', say: 'play music' })).toBe(true);
+    expect(plainStep({ label: 'Draw a floor plan', say: 'draw a two bedroom floor plan' })).toBe(true);
+    expect(plainStep({ label: 'Save this board', say: 'save this board' })).toBe(true);
+    expect(plainStep({ label: 'Play board music', say: 'play board music' })).toBe(false);
+    expect(plainStep({ label: 'Play board music', say: 'play music' })).toBe(false);
+    expect(plainStep({ label: 'Start the music now please', say: 'start the music now please' })).toBe(false); // 5 words
+    expect(plainStep({ label: 'Music!', say: 'play music' })).toBe(false);
+    expect(plainStep({ label: 'Enjoy a song', say: 'play music' })).toBe(false); // the label is not what it says
+  });
+  it('a generated reply keeps only plain, known asks; the rest are dropped and counted', () => {
+    const r = coerceNextSteps({ at: 'dashboard', steps: [
+      step('music', 'Play board music', 'play board music'),
+      step('play', 'Play music', 'play music'),
+      step('poem', 'Write a poem', 'write a poem'),
+      step('devices', 'Show my devices', 'show my devices'),
+    ] }, { isKnownAsk: known });
+    expect(r.ok && r.value.steps.map((x) => x.label)).toEqual(['Play music', 'Show my devices']);
+    expect(r.ok && r.notes).toEqual(['Dropped 2 suggestions that failed the check.']);
+    expect(coerceNextSteps({ at: 'dashboard', steps: [step('poem', 'Write a poem', 'write a poem')] }, { isKnownAsk: known }).ok).toBe(false);
+  });
+  it('the recorded steps fixture passes the generated-chip check', () => {
+    const f = JSON.parse(readFileSync('tests/fixtures/replies/nano.steps.json', 'utf8'));
+    const r = coerceNextSteps({ at: 'devices', ...JSON.parse(f.reply) }, { isKnownAsk: known });
+    expect(r.ok && r.value.steps.length).toBe(3);
   });
 });
 

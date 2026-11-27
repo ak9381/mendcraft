@@ -134,7 +134,7 @@ import { createWarmBar } from './warmBar';
 import { createCanvasAiFeed, type AiFeed } from './aiFeed';
 import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAiFeed';
 import { boardForJourney, isDevicesBoard, journeyStepOf, type JourneyStep } from './journey';
-import { coerceNextSteps, createNextStepChips, planExtraRan, STEPS_CONSTRAINT, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type NextChips, type ShownSteps } from './nextSteps';
+import { coerceNextSteps, createNextStepChips, planExtraRan, plainStep, STEPS_CONSTRAINT, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type NextChips, type ShownSteps } from './nextSteps';
 import { extractJson } from '../ai/cloudJson';
 import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from './devicesTurn';
@@ -1452,7 +1452,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200 });
       const raw = extractJson(full);
       // The step is ours, not the reply's: what she is at decides where they show.
-      const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at, sig } : raw);
+      const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at, sig } : raw, { isKnownAsk });
       if (!r.ok) { log(`Next steps refused: ${r.error}. Nothing was generated.`); return; }
       for (const n of r.notes ?? []) log(n);
       const by: ArtifactBy = replayRouteIn(engine.routeLine) ? 'replay' : engine.id;
@@ -1472,10 +1472,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (again) void requestSteps(again);
     }
   }
-  /** The kept suggestions for a journey step, with who wrote them. */
+  /** A chip's words are an ask the canvas knows here (not open-ended chat). */
+  function isKnownAsk(say: string): boolean {
+    try { return routeLine(say, routeWorld(routePlanBoard())).name !== 'openEnded'; } catch { return false; }
+  }
+  /** The kept suggestions for a journey step, with who wrote them. Only
+   *  plain commands she could say that the canvas knows here are shown (a
+   *  stored chip from an older reply is checked again too). */
   function stepsFor(at: JourneyStep): ShownSteps | null {
     const a = stepArtifacts.get(at);
-    const steps = a?.data.steps as ShownSteps['steps'] | undefined;
+    const steps = (a?.data.steps as ShownSteps['steps'] | undefined)?.filter((x) => plainStep(x) && isKnownAsk(x.say));
     return a && steps?.length ? { steps, label: stepsLabel(a.by) } : null;
   }
 

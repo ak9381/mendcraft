@@ -35,11 +35,37 @@ export const STEPS_CONSTRAINT: Record<string, unknown> = {
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const okText = (v: unknown, max: number): v is string => typeof v === 'string' && !!v.trim() && v.length <= max && !/[<>]/.test(v);
 
+/** A chip label is a short command she could say: at most this many words. */
+export const STEP_LABEL_WORDS = 4;
+const FILLER = new Set(['a', 'an', 'the', 'my', 'this', 'that', 'some', 'please']);
+const words = (t: string): string[] => t.toLowerCase().replace(/[’']/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+
+/** A chip that reads as a plain command she could say ("Play music", "Show
+ *  my devices"): letters, digits and spaces only, at most STEP_LABEL_WORDS
+ *  words, every word of it also in what the chip says, and "board" never
+ *  used to describe something ("Play board music" was a live chip). */
+export function plainStep(s: Pick<NextStep, 'label' | 'say'>): boolean {
+  const label = s.label.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ’']*$/.test(label)) return false;
+  const lw = words(label);
+  if (!lw.length || lw.length > STEP_LABEL_WORDS) return false;
+  if (/\bboards?\s+[a-z]/i.test(label) || /\bboards?\s+[a-z]/i.test(s.say)) return false;
+  const sw = new Set(words(s.say));
+  if (sw.size > 12) return false;
+  return lw.every((w) => FILLER.has(w) || sw.has(w));
+}
+
+export interface StepChecks {
+  /** The chip's `say` is an ask the canvas knows (it routes to a command,
+   *  not to open-ended chat). Without it only the shape is checked. */
+  isKnownAsk?: (say: string) => boolean;
+}
+
 /** Untrusted steps → at most MAX_NEXT_STEPS checked steps for one journey
  *  step. Nothing is trimmed silently: a step with a bad id, a label over 32
  *  characters, a `say` over 80, markup or a repeat is dropped and counted in
  *  `notes`, and so is every step past the third. None left is a refusal. */
-export function coerceNextSteps(raw: unknown): Coerced<{ at: string; steps: NextStep[]; sig?: string }> {
+export function coerceNextSteps(raw: unknown, checks: StepChecks = {}): Coerced<{ at: string; steps: NextStep[]; sig?: string }> {
   if (!isObj(raw)) return { ok: false, error: 'not an object' };
   if (raw.sig !== undefined && (typeof raw.sig !== 'string' || !SIG_RE.test(raw.sig))) return { ok: false, error: 'bad facts signature' };
   if (!(JOURNEY_STEPS as readonly unknown[]).includes(raw.at)) return { ok: false, error: 'unknown journey step' };
@@ -50,6 +76,9 @@ export function coerceNextSteps(raw: unknown): Coerced<{ at: string; steps: Next
   for (const s of raw.steps) {
     if (!isObj(s) || typeof s.id !== 'string' || !STEP_ID_RE.test(s.id) || !okText(s.label, STEP_LABEL_MAX) || !okText(s.say, STEP_SAY_MAX)
       || steps.some((x) => x.id === s.id)) { bad++; continue; }
+    // A new reply's chips must be plain commands she could say, and asks the
+    // canvas knows (stored ones are re-checked where they show: stepsFor).
+    if (checks.isKnownAsk && (!plainStep({ label: s.label, say: s.say }) || !checks.isKnownAsk(s.say.trim()))) { bad++; continue; }
     if (steps.length >= MAX_NEXT_STEPS) { over++; continue; }
     steps.push({ id: s.id, label: s.label.trim(), say: s.say.trim() });
   }
@@ -70,8 +99,10 @@ export function stepsPrompt(at: JourneyStep, facts: StepFacts): string {
     'The canvas can: connect devices and phones, show her devices, build a dashboard for her lamps, speaker and gimbal, play music,'
       + ' save a board, draw a floor plan, check it for accessibility, show it in 3D, export DXF, add a language such as Kannada, show everything.',
     `She is at the "${at}" step. Devices here: ${facts.devices}. Boards: ${facts.boards}. Paired phones: ${facts.phones}.`,
-    `Suggest at most ${MAX_NEXT_STEPS} next steps, most useful first. Each has an id (lowercase words joined by -), a label of at most ${STEP_LABEL_MAX} characters,`
-      + ` and "say": the short sentence she would say to do it (at most ${STEP_SAY_MAX} characters).`,
+    `Suggest at most ${MAX_NEXT_STEPS} next steps, most useful first. Each has an id (lowercase words joined by -),`
+      + ` a label: the command itself as she would say it, ${STEP_LABEL_WORDS} words at most (for example "Play music", "Show my devices", "Draw a floor plan", "Save this board", "Add Kannada", "Show everything"),`
+      + ` and "say": the same command in plain words (at most ${STEP_SAY_MAX} characters), using every word of the label.`,
+    'Only suggest things from the list above. Never describe the canvas in a label ("board music", "dashboard lamp"); no punctuation.',
     'Reply JSON only: {"steps":[{"id":string,"label":string,"say":string}]}',
   ].join('\n');
 }
