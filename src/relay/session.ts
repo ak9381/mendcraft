@@ -359,7 +359,7 @@ export async function createHostSession(
     if (msg.from === 'control') {
       // A read-only dashboard, not a remote: never changes pairing. Replay the
       // latest state so it populates immediately.
-      if (msg.type === 'hello' && lastSnapshot) void publishState(lastSnapshot).catch(() => undefined);
+      if (msg.type === 'hello' && lastSnapshot) void publishState(markReplay(lastSnapshot)).catch(() => undefined);
       return;
     }
     if (msg.type === 'hello') {
