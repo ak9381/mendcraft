@@ -1015,6 +1015,7 @@
 @media (prefers-reduced-motion: reduce) {
   .mc-frame.mc-frame-sending, .mc-frame.mc-frame-arrived .mc-frame-pill[data-pill="arrived"] { animation: none; }
   .mc-frame.mc-frame-sent { animation: none; outline: 6px solid rgb(var(--mc-send-green)); outline-offset: 2px; }
+  .mc-frame.mc-frame-arrived, .mc-phone-simple .mc-frame.mc-frame-arrived { transition: none; }
 }
 
 .mc-arrange {

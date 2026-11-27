@@ -286,7 +286,7 @@ afterFirstPaint(() => {
       native: isPhone,
       sim,
       aiForwarder: phoneAiFeed,
-      onSnapshot: (snap) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, arrival); },
+      onSnapshot: (snap, meta) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, arrival, meta); },
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;

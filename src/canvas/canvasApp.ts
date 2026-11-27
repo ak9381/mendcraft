@@ -35,7 +35,7 @@ import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
-import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
+import { createSendGlowPainter, flagArrived, flashSent, frameSelector, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
 import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
 import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
@@ -498,7 +498,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // it fills (never floating loose over the canvas; off the board = hidden).
   const swarmAnchor = (tileIndex: number | undefined): { x: number; y: number } | null => {
     const id = focusId ?? lastFocus;
-    const frame = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"]`) : null;
+    const frame = id ? world.querySelector<HTMLElement>(`${frameSelector(id)}`) : null;
     if (!frame) return null;
     const tile = tileIndex == null ? null
       : frame.querySelector<HTMLElement>(`.mc-ghost-tile[data-tile-i="${tileIndex}"]`) ?? frame.querySelectorAll<HTMLElement>('[data-mc-tile]')[tileIndex] ?? null;
@@ -629,7 +629,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function boardDrawingsOf(frameId: string, board: SurfacePlan): Record<string, unknown> {
     const out: Record<string, unknown> = { ...(drawings[frameId] ?? {}) };
     if (frameId) {
-      for (const pb of world.querySelectorAll<HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null }>(`[data-frame="${frameId}"] mc-plan-board`)) {
+      for (const pb of world.querySelectorAll<HTMLElement & { planState?: () => { boardId: string; doc: unknown } | null }>(`${frameSelector(frameId)} mc-plan-board`)) {
         const st = pb.planState?.();
         if (st) out[st.boardId] = st.doc;
       }
@@ -643,22 +643,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const simWire = !!opts.sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') && typeof window !== 'undefined';
 
   /** The board being lit for a send right now (boardGlow.ts). */
-  let sendingFrame: string | null = null;
+  // Cached per frame: each drag move only updates --mc-send-glow.
+  const sendGlow = createSendGlowPainter((id) => world.querySelector<HTMLElement>(frameSelector(id)) as unknown as GlowFrame | null);
   function setEdgeGlow(side: 'left' | 'right' | null, glow: number, g: { frameId?: string; target?: PhonePlatform } = {}): void {
     viewport.classList.toggle('mc-edge-glow-left', side === 'left' && glow > 0.05);
     viewport.classList.toggle('mc-edge-glow-right', side === 'right' && glow > 0.05);
     // The dragged board ITSELF lights up near a paired phone's edge.
-    const view = sendGlowView(glow, g.target);
-    const next = view.on && g.frameId ? g.frameId : null;
-    if (sendingFrame && sendingFrame !== next) {
-      const old = world.querySelector<HTMLElement>(`[data-frame="${sendingFrame}"]`);
-      if (old) applySendGlow(old as unknown as GlowFrame, sendGlowView(0, null));
-    }
-    sendingFrame = next;
-    if (next) {
-      const el = world.querySelector<HTMLElement>(`[data-frame="${next}"]`);
-      if (el) applySendGlow(el as unknown as GlowFrame, view);
-    }
+    sendGlow.paint(g.frameId ?? null, sendGlowView(glow, g.target));
     // The phones strip shows which phone sits on that side while a board nears an edge.
     const near = !!side && glow > 0.05;
     if (near !== edgeNear) { edgeNear = near; showArrangeStrip(); }
@@ -849,7 +840,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
         publishBoardTransfer(s.frameId, s.board, null, s.target, stamp);
       }
-      const sentEl = world.querySelector<HTMLElement>(`[data-frame="${s.frameId}"]`);
+      const sentEl = world.querySelector<HTMLElement>(`${frameSelector(s.frameId)}`);
+      sendGlow.paint(null, sendGlowView(0, null)); // the painter forgets it: flashSent clears it
       if (sentEl) flashSent(sentEl as unknown as GlowFrame);
       boardSends++;
       say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
@@ -1006,7 +998,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     flowOnly: () => phoneShell,
     getItems: (frameId) => {
       const plan = surfaces[frameId];
-      const surfaceEl = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`);
+      const surfaceEl = world.querySelector<HTMLElement>(`${frameSelector(frameId)} .mc-surface`);
       if (!plan || !surfaceEl) return [];
       const els = collectTileEls(surfaceEl);
       const out: EditItemRef[] = [];
@@ -1485,7 +1477,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const sid = (s as { id: string }).id;
     const host = sid.endsWith('-dock')
       ? dockSurfaceEl
-      : world.querySelector<HTMLElement>(`[data-frame="${sid}"] .mc-surface`);
+      : world.querySelector<HTMLElement>(`${frameSelector(sid)} .mc-surface`);
     // The surface exists in the processor even with nowhere to mount yet:
     // recorded, so the next render deletes it first ("already exists").
     live.add(sid);
@@ -1669,7 +1661,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     body.classList.toggle('is-more-below', body.scrollHeight - body.scrollTop - body.clientHeight > 2);
   }
   function frameEl(f: Frame): HTMLElement {
-    let el = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`);
+    let el = world.querySelector<HTMLElement>(`${frameSelector(f.id)}`);
     if (!el) {
       el = document.createElement('section');
       el.className = 'mc-frame';
@@ -1796,7 +1788,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  between the top inset and the bottom chrome (so the canvas scrolls). */
   function tallRoomEl(): HTMLElement | null {
     if (phoneShell || !focusId || !isRoomBoard(focusId)) return null;
-    const el = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`);
+    const el = world.querySelector<HTMLElement>(`${frameSelector(focusId)}`);
     if (!el) return null;
     const h = el.getBoundingClientRect().height;
     return h > vp().h - barH() - bottomInset() + 1 ? el : null;
@@ -1901,7 +1893,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function clampPhoneScroll(): void {
     if (!phoneShell || !focusId) return;
     const f = reg.get(focusId);
-    const el = world.querySelector<HTMLElement>(`[data-frame="${focusId}"]`);
+    const el = world.querySelector<HTMLElement>(`${frameSelector(focusId)}`);
     if (!f || !el) return;
     const { top, chrome } = phoneBands();
     const minY = f.rect.y - top;
@@ -1983,7 +1975,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (had?.w !== fit?.w || had?.h !== fit?.h) sync();
     if (room) {
       // The board is as tall as its tiles at this width: measure, don't assume.
-      const el = world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`);
+      const el = world.querySelector<HTMLElement>(`${frameSelector(f.id)}`);
       let real = el?.offsetHeight || 0;
       let w = fit?.w ?? f.rect.w;
       // Too tall to show whole? Wider (zoomed out to the floor it would hit
@@ -2085,7 +2077,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  (fitBoardWidth / focusFit): the board's own size is never changed, so it
    *  goes back when Hands goes off, in overview, and across reloads. */
   function handsPlanBoard(id: string): boolean {
-    return !phoneShell && !!gestures?.isActive() && !!world.querySelector(`[data-frame="${id}"] mc-plan-board`);
+    return !phoneShell && !!gestures?.isActive() && !!world.querySelector(`${frameSelector(id)} mc-plan-board`);
   }
   async function focus(id: string): Promise<void> {
     let f = reg.get(id); if (!f) return;
@@ -2419,7 +2411,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  cursor badge) for ~900ms. */
   function flashGhostTarget(tileIndex: number, kind: SwarmKind): void {
     const id = focusId ?? lastFocus;
-    const tileEl = id ? world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-ghost-tile[data-tile-i="${tileIndex}"]`) : null;
+    const tileEl = id ? world.querySelector<HTMLElement>(`${frameSelector(id)} .mc-ghost-tile[data-tile-i="${tileIndex}"]`) : null;
     // A morph turn has no ghost — its cursors land on the real tile instead.
     if (!tileEl) { morphFlow?.pulseTarget(); return; }
     tileEl.classList.add('is-swarm-target');
@@ -2429,7 +2421,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     revealGhostTile(tileEl, kind === 'gemini' || tileEl.classList.contains('stage-frame') ? 'controls' : 'labels');
   }
   function ghost(frameId: string, g: PartialPlan | null): void {
-    const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-ghost`);
+    const el = world.querySelector<HTMLElement>(`${frameSelector(frameId)} .mc-ghost`);
     if (!el) return;
     clearGhostTimers(frameId);
     if (!g) { el.hidden = true; el.innerHTML = ''; return; }
@@ -2691,7 +2683,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           built = true;
         } catch (e) {
           if (before) { surfaces[frameId] = before; renderSurface(frameId); }
-          else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`); if (el) el.innerHTML = ''; }
+          else { delete surfaces[frameId]; const el = world.querySelector<HTMLElement>(`${frameSelector(frameId)} .mc-surface`); if (el) el.innerHTML = ''; }
           sync(); updateDock(); persist();
           const why = e instanceof Error ? e.message : 'The build failed after Approve';
           panels.forEngine(ranId).fail(why);
@@ -2838,7 +2830,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let planEditBy: EngineId | null = null;
   /** The plan board an edit goes to: the focused one, else the Floor plan board. */
   function planEditTarget(): { frameId: string; el: PlanBoardEl } | null {
-    const on = (id: string | null | undefined) => (id ? world.querySelector<PlanBoardEl>(`[data-frame="${id}"] mc-plan-board`) : null);
+    const on = (id: string | null | undefined) => (id ? world.querySelector<PlanBoardEl>(`${frameSelector(id)} mc-plan-board`) : null);
     const focused = on(focusId);
     if (focused && focusId) return { frameId: focusId, el: focused };
     const frames = reg.list();
@@ -2917,7 +2909,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const keepIt = () => {
         prop.accept();
         // Applied only now, as one undoable plan edit on the board.
-        const live = world.querySelector<PlanBoardEl>(`[data-frame="${frameId}"] mc-plan-board`) ?? el;
+        const live = world.querySelector<PlanBoardEl>(`${frameSelector(frameId)} mc-plan-board`) ?? el;
         planEditBy = ranId;
         let ok = false;
         try { ok = !!live.applyPlanDoc?.(value.doc, summary); } finally { planEditBy = null; }
@@ -3395,7 +3387,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!id || !reg.get(id)) { say('Open a board first, then connect a device.'); return; }
     closeConnectSheet();
     if (focusId !== id) void focus(id);
-    const host = world.querySelector<HTMLElement>(`[data-frame="${id}"] .mc-connect-host`);
+    const host = world.querySelector<HTMLElement>(`${frameSelector(id)} .mc-connect-host`);
     if (!host) return;
     host.hidden = false;
     flowOwnsHost = flowOpening;
@@ -3588,7 +3580,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (h.kind === 'plan') {
       // A floor-plan drawing edit (hand or mouse): the plan engine takes it
       // back with its own undo steps — no copy of the plan lives here.
-      const pb = world.querySelector<HTMLElement & { undoPlanEdit?: (steps: number, epoch: number) => number }>(`[data-frame="${h.frameId}"] mc-plan-board`);
+      const pb = world.querySelector<HTMLElement & { undoPlanEdit?: (steps: number, epoch: number) => number }>(`${frameSelector(h.frameId)} mc-plan-board`);
       const n = pb?.undoPlanEdit?.(h.planSteps ?? 0, h.planEpoch ?? -1) ?? 0;
       if (n) savePlanDrawing(h.frameId, pb);
       historyRender();
@@ -3596,7 +3588,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     if (h.before) { surfaces[h.frameId] = h.before; reg.rename(h.frameId, h.before.title); } else { delete surfaces[h.frameId]; live.delete(h.frameId); deviceSurfaces.untrack(h.frameId); }
-    const el = world.querySelector<HTMLElement>(`[data-frame="${h.frameId}"] .mc-surface`);
+    const el = world.querySelector<HTMLElement>(`${frameSelector(h.frameId)} .mc-surface`);
     if (el && !h.before) el.innerHTML = '';
     if (h.before) renderSurface(h.frameId);
     sync(); updateDock(); persist(); historyRender();
@@ -3880,7 +3872,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // and a focused plan board takes the whole free space for drawing.
         onActive: () => {
           // Shown bigger with Hands on, back to its own size with Hands off.
-          if (focusId && world.querySelector(`[data-frame="${focusId}"] mc-plan-board`)) refit(focusId);
+          if (focusId && world.querySelector(`${frameSelector(focusId)} mc-plan-board`)) refit(focusId);
           refreshPlanHands(true);
         },
         ...(phoneShell ? { reach: () => phoneReach(phoneCamAspect) } : {}),
@@ -4733,10 +4725,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   type PB = HTMLElement & { runExtra?: (k: PlanExtra) => string };
   function routePlanBoard(): PB | null {
     const planId = focusId ?? lastFocus;
-    return (planId ? world.querySelector<PB>(`[data-frame="${planId}"] mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
+    return (planId ? world.querySelector<PB>(`${frameSelector(planId)} mc-plan-board`) : null) ?? (focusId ? null : world.querySelector<PB>('mc-plan-board'));
   }
   function routeWorld(planBoard: PB | null): RouteWorld {
-    const focusedPlanEl = focusId ? world.querySelector<HTMLElement & { planState?: () => { doc: unknown } | null }>(`[data-frame="${focusId}"] mc-plan-board`) : null;
+    const focusedPlanEl = focusId ? world.querySelector<HTMLElement & { planState?: () => { doc: unknown } | null }>(`${frameSelector(focusId)} mc-plan-board`) : null;
     return {
       hasPlanBoard: !!planBoard?.runExtra,
       planFocused: !!focusedPlanEl,
@@ -4765,7 +4757,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       root.querySelector('.mc-review-dialog:not([hidden])'),
       root.querySelector('.mc-menu-sheet:not([hidden])'),
       root.querySelector('.mc-ai:not([hidden])'),
-      focusId ? world.querySelector(`[data-frame="${focusId}"]`) : null,
+      focusId ? world.querySelector(`${frameSelector(focusId)}`) : null,
     ];
     for (const scope of scopes) {
       const el = firstScroller(scope);
@@ -5390,14 +5382,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // A phone with no board yet: the new frame's DOM must exist before the
     // surface mounts into it (else the board stays blank and the next send
     // throws "surface already exists").
-    if (!world.querySelector(`[data-frame="${id}"] .mc-surface`)) sync();
+    if (!world.querySelector(`${frameSelector(id)} .mc-surface`)) sync();
     renderSurface(id);
     // The laptop's drawing did not fit the relay: say so — the board shows
     // its starting layout, never passed off as her plan.
     if ((info.drawingsOmitted ?? 0) > 0 && planBoardIds(plan).length) {
       const frameId = id;
       waitForLayout(() => {
-        for (const st of world.querySelectorAll<HTMLElement>(`[data-frame="${frameId}"] mc-plan-board .mc-plan-extra-status`)) st.textContent = PLAN_TOO_BIG;
+        for (const st of world.querySelectorAll<HTMLElement>(`${frameSelector(frameId)} mc-plan-board .mc-plan-extra-status`)) st.textContent = PLAN_TOO_BIG;
       });
       say(PLAN_TOO_BIG);
     }
@@ -5410,7 +5402,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // A real send from the laptop (not a replay): the board lights up green
     // with "Moved from laptop" for a few seconds.
     if (info.arrived) {
-      const el = world.querySelector<HTMLElement>(`[data-frame="${id}"]`);
+      const el = world.querySelector<HTMLElement>(`${frameSelector(id)}`);
       if (el) flagArrived(el as unknown as GlowFrame);
     }
   }
@@ -5480,7 +5472,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // tileComponentId without touching the renderers.
   function stampMorphTiles(frameId: string): HTMLElement[] {
     const plan = surfaces[frameId];
-    const surfaceEl = world.querySelector<HTMLElement>(`[data-frame="${frameId}"] .mc-surface`);
+    const surfaceEl = world.querySelector<HTMLElement>(`${frameSelector(frameId)} .mc-surface`);
     if (!plan || !surfaceEl) return [];
     const liveEls = Array.from(surfaceEl.querySelectorAll<HTMLElement>(LIVE_TILE_TAGS.join(',')));
     const els = liveEls.length ? liveEls : Array.from(surfaceEl.querySelectorAll<HTMLElement>(FALLBACK_TILE_SELECTOR));
@@ -5814,7 +5806,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     root: world,
     focused: () => {
       const f = focusId ? reg.get(focusId) : undefined;
-      const el = f ? world.querySelector<HTMLElement>(`[data-frame="${f.id}"]`) : null;
+      const el = f ? world.querySelector<HTMLElement>(`${frameSelector(f.id)}`) : null;
       return f && el ? { id: f.id, el, board: boardForJourney(f, surfaces[f.id]) } : null;
     },
     ctx: () => ({
