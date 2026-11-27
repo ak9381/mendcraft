@@ -202,6 +202,7 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     "I can tell you about the floor plan board.",
     "Your daughter sounds lovely.",
     "I'll start by saying hello!",
+    "I'll warm up to the idea.",
   ];
   const claims = [
     'Yes, I can. I will call your daughter right away.',
@@ -245,7 +246,7 @@ describe('probe set: small talk passes, action claims are replaced', () => {
     'Let me warm the kitchen up.',
   ];
   it('the sets are the agreed size', () => {
-    expect(smallTalk.length).toBe(60);
+    expect(smallTalk.length).toBe(61);
     expect(claims.length).toBe(38);
   });
   for (const c of smallTalk) it(`passes: ${c}`, () => expect(promisesAction(c)).toBe(false));

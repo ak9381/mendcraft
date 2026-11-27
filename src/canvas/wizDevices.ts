@@ -152,19 +152,22 @@ export function createWizAwareConnector(deps: WizConnectorDeps): DeviceConnector
     const checked = plans.map((p) => (p.ok ? checkPlanned(p.request, { native: !!deps.native }) : { ok: false as const, why: 'Nothing changed.' }));
     for (const c of checked) if (!c.ok) throw new DeviceError(c.why);
     let state: LampState | null = null;
-    for (const [i, c] of checked.entries()) {
+    /** True once a request of this press has really gone out. */
+    let sent = false;
+    for (const c of checked) {
       if (!c.ok) continue;
       let r: Awaited<ReturnType<typeof sendChecked>>;
       try { r = await sendChecked(c.checked, { wiz: deps.client, native: deps.native }); }
       catch (e) {
         // The bridge said no to a later request of this press: the earlier
         // ones already went out, so "the lamp did not change" is not true.
-        if (i > 0 && e instanceof BridgeRefusedError) throw new DeviceError(`The bridge refused a step (${e.message.replace(/[.\s]+$/, '')}). Part of this was already sent.`);
+        if (sent && e instanceof BridgeRefusedError) throw new DeviceError(`The bridge refused a step (${e.message.replace(/[.\s]+$/, '')}). Part of this was already sent.`);
         throw e;
       }
       // Only an HTTP device can answer "no" after a send: when earlier
       // requests of this press already went out, the line says so.
-      if (!r.ok) throw new DeviceError(i === 0 ? r.why : `${r.why.replace(/\s*Nothing changed\.$/, '')} Part of this was already sent.`);
+      if (!r.ok) throw new DeviceError(!sent ? r.why : `${r.why.replace(/\s*Nothing changed\.$/, '')} Part of this was already sent.`);
+      sent = true;
       if (r.state !== undefined) state = r.state;
     }
     return ack(state, intent);
