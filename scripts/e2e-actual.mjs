@@ -426,8 +426,17 @@ async function devices(page) {
   await waitFor(page, () => !document.querySelector('.mc-paired-continue'), 8_000, 'pairing moves on');
   check(!(await frames(page)).some((f) => /Connected devices/.test(f.title)), 'pairing alone makes no devices board');
 
+  // The draft behind the review shows what is proposed (a devices table), never a "Floor plan" placeholder.
+  await page.evaluate(() => {
+    const seen = window.__e2eGhost = [];
+    const mo = new MutationObserver(() => { for (const t of document.querySelectorAll('.mc-ghost .mc-ghost-tile[data-tile-i]')) { const v = [...t.querySelectorAll('span')].map((x) => x.textContent).join(' / '); if (!seen.includes(v)) seen.push(v); } });
+    mo.observe(document.querySelector('.mc-viewport'), { childList: true, subtree: true });
+    window.__e2eGhostStop = () => mo.disconnect();
+  });
   await page.evaluate(() => window.__mcCanvas.run('show my devices'));
   if (!(await waitFor(page, reviewOpen, 15_000, 'the devices review opens'))) return;
+  const drafted = await page.evaluate(() => { window.__e2eGhostStop(); return window.__e2eGhost; });
+  check(drafted.some((d) => /Devices table/.test(d)) && !drafted.some((d) => /Floor plan|Plan\b/.test(d)), `the draft shows a devices table, no floor-plan placeholder (got ${JSON.stringify(drafted)})`);
   check((await page.evaluate(reviewText)).includes('Replay · written example'), 'the devices review names "Replay · written example"');
   const notes = await page.evaluate(reviewNotes);
   check(notes.includes("Dropped 1 column a live devices table can't show."), `the review says the ip column was dropped (got ${JSON.stringify(notes)})`);

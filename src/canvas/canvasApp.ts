@@ -136,6 +136,7 @@ import { createAnnounceGate, createPhoneAiRepublisher, teeFeed } from './phoneAi
 import { boardForJourney, isDevicesBoard, journeyStepOf, type JourneyStep } from './journey';
 import { coerceNextSteps, createNextStepChips, planExtraRan, STEPS_CONSTRAINT, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type NextChips, type ShownSteps } from './nextSteps';
 import { extractJson } from '../ai/cloudJson';
+import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from './devicesTurn';
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
@@ -2664,16 +2665,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     (ghostTimers.get(frameId) ?? []).forEach((id) => window.clearTimeout(id));
     ghostTimers.delete(frameId);
   }
-  const ghostKindWord = (t: PartialPlan['tiles'][number]): string =>
-    t.type === 'lamp' ? 'Lamp' : t.type === 'music' ? 'Music' : t.type === 'switch' ? 'Switch'
-    : t.type === 'scene' ? 'Scene' : t.type === 'connect' ? 'Connect' : 'Plan';
-  const ghostFullLabel = (t: PartialPlan['tiles'][number]): string =>
-    t.type === 'lamp' ? `Lamp · ${esc(t.label)}`
-    : t.type === 'music' ? `Music · ${esc(t.label)}`
-    : t.type === 'switch' ? `Switch · ${esc(t.label)}`
-    : t.type === 'scene' ? `Scene · ${esc(t.label)}`
-    : t.type === 'connect' ? 'Connect a device'
-    : 'Floor plan';
+  // Each tile drafts as what it is (ghostWords.ts): a devices table is never a "Floor plan".
+  const ghostKindWord = (t: PartialPlan['tiles'][number]): string => ghostWords(t).kind;
+  const ghostFullLabel = (t: PartialPlan['tiles'][number]): string => esc(ghostWords(t).full);
   function revealGhostTile(tileEl: HTMLElement, stage: 'controls' | 'labels'): void {
     if (stage === 'controls') {
       // Already labelled (a later cursor of the same engine landed again):
@@ -2708,9 +2702,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!el) return;
     clearGhostTimers(frameId);
     if (!g) { el.hidden = true; el.innerHTML = ''; return; }
-    growSwarm(g.tiles.map(ghostKindWord));
+    const tiles = ghostLeaves(g.tiles); // a card around a table drafts the table
+    growSwarm(tiles.map(ghostKindWord));
     el.hidden = false;
-    el.innerHTML = `<p class="mc-ghost-title">${esc(g.title ?? '…')}</p>` + g.tiles.map((t, i) =>
+    el.innerHTML = `<p class="mc-ghost-title">${esc(g.title ?? '…')}</p>` + tiles.map((t, i) =>
       `<div class="mc-ghost-tile ${t.type} stage-frame" data-tile-i="${i}">` +
       `<span class="mc-ghost-tile-kind" hidden>${esc(ghostKindWord(t))}</span>` +
       `<span class="mc-ghost-tile-value" hidden>${ghostFullLabel(t)}</span></div>`).join('')
