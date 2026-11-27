@@ -37,7 +37,9 @@ import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
 import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
 import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
-import { applyTileToPlan, parseTransfer, removeTileFromPlan, type TileTransfer } from './tileTransfer';
+import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } from './tileTransfer';
+import { createAskOrigins } from './askOrigin';
+import { MAX_TILES } from './surfacePlan';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
 import { clearHostToken, loadLayout, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
@@ -316,6 +318,10 @@ export const ROOM_MAX_W = 1280;
 export const ROOM_WIDE_MAX_W = 1680;
 /** Re-opening the code for one more phone failed; the paired phones are fine. */
 export const REPAIR_FAILED_LINE = 'Couldn’t reopen pairing — your phones are still connected.';
+/** A tile sent back from a phone that the laptop board can't take. */
+export const PHONE_TILE_FULL_LINE = `That board already has ${MAX_TILES} tiles, so the tile from the phone wasn’t added. Nothing changed.`;
+export const PHONE_TILE_BUSY_LINE = 'Finish the review first — the tile from the phone wasn’t added. Nothing changed.';
+export const PHONE_TILE_BAD_LINE = 'Couldn’t add the tile from the phone — it didn’t pass the check. Nothing changed.';
 /** The Nano devices draft's route line (nothing leaves this device). */
 export const NANO_DEVICES_ROUTE = 'Nano · on device — nothing left this device';
 /** A devices reply without the live table (it may not write rows itself). */
@@ -853,19 +859,67 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (t.to === 'laptop') {
       const plan = surfaces[frameId];
       if (plan) {
-        const next = applyTileToPlan(plan, t.tile);
-        if (next !== plan) {
-          surfaces[frameId] = next;
-          renderSurface(frameId);
-          sync(); persist();
-          history.push({ frameId, before: plan, after: next, by: 'her', summary: 'A tile came back from a phone' });
-          historyRender();
-          say('A tile came back from a phone.');
+        // Like any other change to a laptop board it waits for her review,
+        // and a full board (MAX_TILES) or an open review refuses it.
+        const r = tileFromPhone(plan, t.tile);
+        if (!r.ok && r.why !== 'same') {
+          say(r.why === 'full' ? PHONE_TILE_FULL_LINE : PHONE_TILE_BAD_LINE);
+          publishBoardTransfer(frameId, plan, null); // the phones see the board as it is
+          return;
+        }
+        if (r.ok) {
+          if (reviewBusy()) { say(PHONE_TILE_BUSY_LINE); publishBoardTransfer(frameId, plan, null); return; }
+          void proposePhoneTile(frameId, plan, r.plan).then((kept) => {
+            publishBoardTransfer(frameId, surfaces[frameId] ?? null, kept ? t : null);
+          });
+          return;
         }
       }
     }
     // Republish so the OTHER phone (a left↔right hop, or a return) also sees it.
     publishBoardTransfer(frameId, surfaces[frameId] ?? null, t);
+  }
+  /** The review for a tile a phone sent back: no model ran, nothing left this
+   *  laptop; Approve adds it as one undoable change. Resolves kept or not. */
+  function proposePhoneTile(frameId: string, before: SurfacePlan, plan: SurfacePlan): Promise<boolean> {
+    const summary = 'Add the tile sent back from a phone';
+    const check = gateMessages(expandPlan(plan, frameId, store.all(), { deviceRows: isDevicesBoard(plan) ? liveDeviceRows() : [] }), CATALOG_SCHEMAS);
+    if (!check.ok) { say(PHONE_TILE_BAD_LINE); return Promise.resolve(false); }
+    return new Promise((done) => {
+      let decided = false;
+      const prop: SurfaceProposal = {
+        id: `pt-${Date.now()}`, by: 'rules', summary,
+        status: () => (decided ? 'accepted' : 'pending'),
+        accept: () => { if (decided) return false; decided = true; return true; },
+        reject: () => { if (decided) return false; decided = true; return true; },
+      };
+      const finish = (line: string, kept: boolean) => {
+        reviewDialog.close(); pending = null;
+        say(line);
+        done(kept);
+      };
+      const keepIt = () => {
+        prop.accept();
+        // The board may have changed while the review was open: the tile is
+        // added to what is there now, under the same checks.
+        const now = surfaces[frameId];
+        const r = now ? tileFromPhone(now, plan.tiles[plan.tiles.length - 1]) : { ok: false as const, why: 'invalid' as const };
+        if (!now || !r.ok) { finish(r.ok || r.why !== 'full' ? 'Couldn’t add the tile — the board changed. Nothing changed.' : PHONE_TILE_FULL_LINE, false); return; }
+        surfaces[frameId] = r.plan;
+        if (!renderSurface(frameId)) { surfaces[frameId] = now; renderSurface(frameId); finish(PHONE_TILE_BAD_LINE, false); return; }
+        history.push({ frameId, before: now, after: r.plan, by: 'her', summary: 'A tile came back from a phone' });
+        sync(); persist(); historyRender();
+        finish('Kept: the tile from the phone. Say “undo” to put it back.', true);
+      };
+      const card = renderProposalCard(document, {
+        id: `p-${frameId}`, title: summary, status: 'waiting',
+        catalog: { helper: 'Quick', byLine: 'Your phone · no model ran', routeLine: 'a tile you sent back from a phone', lineId: 'custom', whyLabel: 'Why here', whatWasSent: null, technicalLine: 'relay · tile transfer' },
+      }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish('Dropped. Nothing changed.', false); } });
+      tagCardI18n(card);
+      pending = { frameId, prop, card, from: 'phone' };
+      showReview({ title: summary, card, extra: buildReviewExtra(), changes: diffPlans(before, plan, { devices: store.all() }), facts: reviewFacts(null) });
+      say(`A tile came back from a phone. Approve or say “keep”; Reject or say “drop”.`);
+    });
   }
 
   const edgeTransfer = createEdgeTransferController({
@@ -2492,7 +2546,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  mid-session is in it; a remembered "Not reachable" bulb is not). */
   const roomDeviceHints = (): DeviceHint[] => answeringDevices(store.all(), { label: labelOf, kind: kindOf, live: liveLamps });
   const deviceRefs = (): DeviceRef[] => Object.entries(store.all()).map(([id, s]) => ({ id, label: labelOf(id), kind: kindOf(id), on: s.on, brightness: s.brightness, playing: s.playing, volume: s.volume, temp: s.temp }));
-  let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement } | null = null;
+  /** `from: 'phone'`: a phone asked for it (its words, or a tile it sent back). */
+  let pending: { frameId: string; prop: SurfaceProposal; card: HTMLElement; from?: 'phone' } | null = null;
+  /** Words a phone sent to run, so its review can be told from hers. */
+  const askOrigins = createAskOrigins();
   // Set synchronously the instant a build/connect turn starts — before any
   // await, so a second trigger during the swarm build (double-click, run while
   // building) can't start a parallel turn that overwrites `pending` and orphans
@@ -3033,7 +3090,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
       }, { onKeep: () => { prop.accept(); finish(true); if (built) bodyLanguage('yes'); }, onDrop: () => { prop.reject(); finish(false); } });
       tagCardI18n(card);
-      pending = { frameId, prop, card };
+      pending = { frameId, prop, card, ...(askOrigins.take(utterance) ? { from: 'phone' as const } : {}) };
       // Every decision — desktop or phone — opens the same full-screen review,
       // so there's one place keep/drop (voice, pinch, Approve/Reject) acts on.
       // One cloud call made it all (no on-device model): "Made by Gemini · N KB".
@@ -3313,7 +3370,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         catalog: { helper: 'Deep', byLine: 'Deep · online', routeLine: sent.routeLine, lineId: 'custom', whyLabel: 'Why online', whatWasSent: sent.sent, technicalLine: sent.routeLine },
       }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish('Dropped. Nothing changed.'); } });
       tagCardI18n(card);
-      pending = { frameId: 'p-floorplan', prop, card };
+      pending = { frameId: 'p-floorplan', prop, card, ...(askOrigins.take(utterance) ? { from: 'phone' as const } : {}) };
       // Where it will open, as things stand now (chosen again at Approve).
       const where = floorPlanTarget({ frames: reg.list(), surfaces, from: focusId });
       const opensOn = where.make || !where.id ? 'It opens on a new board.'
@@ -3429,7 +3486,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           routeLine: si.routeLine, lineId: 'custom', whyLabel: ranId === 'nano' ? 'Why here' : 'Why online', whatWasSent: si.sent, technicalLine: si.routeLine },
       }, { onKeep: keepIt, onDrop: () => { prop.reject(); finish(false, false); } });
       tagCardI18n(card);
-      pending = { frameId, prop, card };
+      pending = { frameId, prop, card, ...(askOrigins.take(text) ? { from: 'phone' as const } : {}) };
       const facts = (): ReviewFacts => {
         const f = reviewFacts(si, text);
         return offlineDraft ? { ...f, chain: 'You’re offline — this is Nano’s draft' } : f;
@@ -3963,10 +4020,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           phoneAi.clear();
           announceGate.clear();
           void hostSession?.askWhoIsThere().catch(() => undefined);
-          // If the phone left a proposal waiting (pre-Approve, nothing applied
-          // yet), drop it so the canvas doesn't keep a review the absent phone
-          // can no longer act on.
-          if (pending) drop();
+          // A review a phone asked for (pre-Approve, nothing applied yet) is
+          // dropped: the phone that asked may be the one that left. Her own
+          // review on the laptop stays — a phone leaving never touches it.
+          if (pending?.from === 'phone') drop();
           const line = phoneDropLine(false);
           pairing?.setStatus(line);
           say(line);
@@ -3987,8 +4044,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (cmd.kind === 'pointResult') { onIphonePointResult(cmd.text ?? ''); return; }
         if (cmd.kind === 'sensePoint' || cmd.kind === 'gimbalCue' || cmd.kind === 'gimbalMode') return; // host → phone only
         dispatchRelayCommand(cmd, {
-          run,
-          undo,
+          run: (text) => { askOrigins.note(text); return run(text); },
+          // The review is the one gate, whoever asks for the undo (C186).
+          undo: userUndo,
           toggleMic: () => micFabRef?.toggle(),
           nudge: (dx, dy) => {
             camera = panBy(camera, -dx * 48, -dy * 48);
