@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseDeviceCommands, type DeviceRef } from '../../src/canvas/deviceCommands';
+import { parseDeviceCommands, volumeStepNoop, VOLUME_AT_MAX_LINE, VOLUME_AT_MIN_LINE, type DeviceRef } from '../../src/canvas/deviceCommands';
 
 const devices: DeviceRef[] = [
   { id: 'lamp-a', label: 'Desk lamp', kind: 'lamp', on: false, brightness: 40 },
@@ -81,5 +81,22 @@ describe('music words inside other sentences are just words (live misparse: "nex
     expect(parseDeviceCommands('please play', devices)!.intents).toEqual([{ deviceId: 'speaker-a', playing: true }]);
     expect(parseDeviceCommands('play the next song', devices)!.intents).toEqual([{ deviceId: 'speaker-a', next: true }]);
     expect(parseDeviceCommands('previous', devices)!.intents).toEqual([{ deviceId: 'speaker-a', previous: true }]);
+  });
+});
+
+describe('final review M8: a volume step that changes nothing says so', () => {
+  const at = (volume: number): DeviceRef[] => [{ id: 'speaker-a', label: 'Speaker', kind: 'music', playing: true, volume }];
+  it('"louder" at 100 and "softer" at 0 are a no-op with an honest line', () => {
+    expect(volumeStepNoop(parseDeviceCommands('louder', at(100))!, () => 100)).toBe(VOLUME_AT_MAX_LINE);
+    expect(volumeStepNoop(parseDeviceCommands('softer', at(0))!, () => 0)).toBe(VOLUME_AT_MIN_LINE);
+  });
+  it('a step that moves the volume, an unknown volume, or another command is not a no-op', () => {
+    expect(volumeStepNoop(parseDeviceCommands('louder', at(90))!, () => 90)).toBeNull();
+    expect(volumeStepNoop(parseDeviceCommands('louder', at(100))!, () => undefined)).toBeNull();
+    expect(volumeStepNoop(parseDeviceCommands('play', at(100))!, () => 100)).toBeNull();
+  });
+  it('the canvas says the line instead of "Louder."', async () => {
+    const src = (await import('node:fs')).readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const noop = volumeStepNoop(dc, (id) => store.get(id)?.volume);');
   });
 });

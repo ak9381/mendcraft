@@ -1,8 +1,7 @@
-// Registers the two local plugins with Capacitor. In Xcode, set the Main
+// Registers the local plugins with Capacitor (LAN, gimbal, Apple on-device AI). In Xcode, set the Main
 // storyboard's view controller class to MendcraftViewController (module App).
-// Also turns DockKit system (face) tracking off on appear, so it really runs
-// on launch even if the plugin's load() missed the first active notification.
-// NOT compiled yet (see ios-src/README.md).
+// DockKit system tracking is NOT forced off here any more: the web layer picks
+// face / hands / hold through MendcraftGimbal.setSystemTrackingEnabled.
 //
 // Copy this file into ios/App/App after `npx cap add ios`.
 
@@ -13,11 +12,20 @@ class MendcraftViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(MendcraftLanPlugin())
         bridge?.registerPluginInstance(MendcraftGimbalPlugin())
+        bridge?.registerPluginInstance(MendcraftAppleAIPlugin())
+        // Canvas colour (#F7F5F0) behind the web view: the status-bar band and
+        // the home-indicator strip are never the black Dark Mode default.
+        let canvas = UIColor(red: 0xF7 / 255.0, green: 0xF5 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
+        view.backgroundColor = canvas
+        webView?.backgroundColor = canvas
+        webView?.scrollView.backgroundColor = canvas
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        MendcraftGimbalPlugin.requestSystemTrackingOff()
+    // The canvas is light whatever the system appearance: dark clock and
+    // icons in the status bar (the default is white ones in Dark Mode, which
+    // are invisible on the light canvas).
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .darkContent
     }
 
     override func viewWillDisappear(_ animated: Bool) {

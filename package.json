@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "ios:setup": "node scripts/ios-setup.mjs",
     "preview": "vite preview",
     "wiz-bridge": "node scripts/wiz-bridge.mjs",
     "gen-icons": "node scripts/gen-icons.mjs",

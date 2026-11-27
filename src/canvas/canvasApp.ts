@@ -60,7 +60,7 @@ import { artifactId, coerceArtifact, frameIdOfArtifactId, type Artifact, type Ar
 import { createMemoryArtifactStore, type ArtifactStore } from '../artifacts/store';
 import { approvalDate, makerLabel, mountArtifactsSheet } from './artifactsSheet';
 import { buildPlanGeneratePrompt, planFromReply, PLAN_GENERATE_FAIL, PLAN_GENERATE_ROUTE_LINE } from './planGenerate';
-import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, rememberedLamps, type LampSlot } from './realLamps';
+import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, managedLampIdsOn, rememberedLamps, type LampSlot } from './realLamps';
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
@@ -74,7 +74,7 @@ import {
   SplitTileElement, StatTileElement, TableTileElement, TabsTileElement,
   VisualTileElement, smartCanvasCatalog,
 } from './widgets';
-import { resolvePointedDevice, type DeviceKind, type DeviceRef } from './deviceCommands';
+import { resolvePointedDevice, volumeStepNoop, type DeviceKind, type DeviceRef } from './deviceCommands';
 import { GIMBAL_DEVICE_ID, LIGHT_ON_RULES_LINE, NOT_THIS_DEVICE_REFUSAL, VOLUME_UNREAD_REFUSAL, deviceClassOf, formIntents, hasLampTile, planHasBindings, pressIntent, visualPress, volumeReadNeeded, type BindingResult, type DevicePress } from './controlSpec';
 import { initialDoc } from './firstOpen';
 import { createConnectivity } from './connectivity';
@@ -1664,7 +1664,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!wizClient || opts.connector || discovering || Date.now() - lastDiscoverAt < REDISCOVER_MS) return;
     await discoverLamps(true);
   }
-  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)));
+  // A board's lamp tile whose bulb missed the last look ("Not connected")
+  // counts too: it is looked for again, so the tile is live when it answers.
+  const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)))
+    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));
   if (wizClient && !opts.connector && liveLamps && typeof window !== 'undefined') {
     const t = setInterval(() => { if (!bridgeStatus.up || anyLampUnreachable()) void rediscoverLamps(); }, REDISCOVER_MS);
     addEventListener('pagehide', () => clearInterval(t), { once: true });
@@ -1694,7 +1697,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const changed = applyRealLamps(lampSwap, lamps);
       syncConnectorLabels();
       for (const fid of changed) renderSurface(fid);
-      if (changed.length) { sync(); updateDock(); persist(); }
+      // Re-rendered only: discovery never changes or saves a board.
+      if (changed.length) { sync(); updateDock(); }
       if (devicesWired) refreshLiveTables();
       // A quiet re-check that changed nothing says nothing.
       if (!again || !wasUp) say(lamps.length ? `${again ? 'The lamp bridge is back — found' : 'Found'} ${lamps.length === 1 ? '1 lamp' : `${lamps.length} lamps`} on this network.` : 'The lamp bridge is running, but no lamp answered.', { speak: true });
@@ -1784,7 +1788,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (r.deviceId && store.get(r.deviceId)) {
         store.patch(r.deviceId, { error: r.refusal });
         if (store.get(r.deviceId)?.unreachable) void rediscoverLamps();
-      }
+      } else if (r.deviceId && isManagedLampId(r.deviceId) && liveLamps) void rediscoverLamps(); // a "Not connected" lamp
       return;
     }
     if ('gimbal' in r) {
@@ -1829,9 +1833,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function renderSurface(id: string): boolean {
     if (!surfaces[id]) return false;
-    // Backstop: whatever reached this board (a saved board from another
-    // session, a script, a shared board) shows only lamps that exist.
-    const plan = surfaces[id] = fitPlan(surfaces[id], id);
+    // The stored board is shown as approved (spec §9): a lamp tile whose
+    // bulb is not found shows "Not connected"; nothing here rewrites it.
+    const plan = roomWithoutPlanTiles(surfaces[id]);
     const msgs: A2uiMessage[] = [
       ...(live.has(id) ? [{ version: 'v0.9', deleteSurface: { surfaceId: id } } as A2uiMessage] : []),
       // The frame head already shows the title: no second heading inside.
@@ -5680,6 +5684,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         if (dc.statusKey === 'louder' || dc.statusKey === 'softer') {
           const unknown = dc.intents.map((i) => i.deviceId).filter((id) => { const d = store.get(id); return !!d && typeof d.volume !== 'number'; });
           if (unknown.length) { withVolumeRead(unknown, () => { run(text); }); return true; }
+          // Already at the limit: nothing is sent, and it is not called "Louder."
+          const noop = volumeStepNoop(dc, (id) => store.get(id)?.volume);
+          if (noop) { say(noop, { speak: true }); return true; }
         }
         const acts: Promise<DeviceState>[] = [];
         for (const i of dc.intents) {

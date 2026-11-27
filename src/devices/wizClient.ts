@@ -96,6 +96,27 @@ export function resolveWizToken(
   }
 }
 
+/** The page address without ?wizToken=, once the token is safely stored (so
+ *  it does not show in the address bar, or in a screen recording). Null when
+ *  there is no token in the address, or it could not be stored (then the
+ *  address keeps it, so the bridge still works). */
+export function wizTokenFreeUrl(
+  href: string,
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null,
+): string | null {
+  try {
+    const url = new URL(href);
+    const q = url.searchParams.get('wizToken');
+    if (!q || !storage) return null;
+    storage.setItem('mendcraft.wizToken', q);
+    if (storage.getItem('mendcraft.wizToken') !== q) return null;
+    url.searchParams.delete('wizToken');
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function createWizClient(
   baseUrl: string = resolveBridgeUrl(),
   fetchImpl: FetchLike = (input, init) => fetch(input, init) as unknown as ReturnType<FetchLike>,

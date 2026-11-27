@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWizClient, resolveWizToken } from '../src/devices/wizClient';
+import { createWizClient, resolveWizToken, wizTokenFreeUrl } from '../src/devices/wizClient';
 
 function fakeStorage(initial: Record<string, string> = {}) {
   const store = { ...initial };
@@ -22,6 +22,27 @@ describe('resolveWizToken', () => {
   it('falls back to a stored token, then empty', () => {
     expect(resolveWizToken('', fakeStorage({ 'mendcraft.wizToken': 'stored-token' }))).toBe('stored-token');
     expect(resolveWizToken('', fakeStorage())).toBe('');
+  });
+});
+
+describe('final review M3: ?wizToken= leaves the address bar once stored', () => {
+  it('stores the token and returns the address without it (other params and the hash kept)', () => {
+    const storage = fakeStorage();
+    expect(wizTokenFreeUrl('https://x.test/canvas?sim=0&wizToken=abc123&a=1#b', storage)).toBe('https://x.test/canvas?sim=0&a=1#b');
+    expect(storage.store['mendcraft.wizToken']).toBe('abc123');
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', fakeStorage())).toBe('https://x.test/canvas');
+  });
+  it('no token in the address: null (nothing to change)', () => {
+    expect(wizTokenFreeUrl('https://x.test/canvas?sim=1', fakeStorage())).toBeNull();
+  });
+  it('storage that will not keep it: the address keeps the token (the bridge still works this session)', () => {
+    const broken = { getItem: () => null, setItem: () => { throw new Error('quota'); } };
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', broken)).toBeNull();
+    expect(wizTokenFreeUrl('https://x.test/canvas?wizToken=abc123', null)).toBeNull();
+  });
+  it('the canvas strips it at boot', async () => {
+    const src = (await import('node:fs')).readFileSync(new URL('../src/canvas/canvasMain.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/const tokenFree = wizTokenFreeUrl\(location\.href, layoutStorage\);\s*if \(tokenFree\) \{ try \{ history\.replaceState\(history\.state, '', tokenFree\);/);
   });
 });
 
