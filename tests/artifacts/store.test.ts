@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import {
@@ -102,6 +103,11 @@ describe('ArtifactStore', () => {
       await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
       expect(await settled).toBe('IndexedDB did not answer');
     } finally { vi.useRealTimers(); }
+  });
+
+  it('only the open is timed: boot then waits for the first read (final review I13)', () => {
+    const src = readFileSync(new URL('../../src/artifacts/store.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/await withinRunningTime\(store\.ready\(\), STORE_OPEN_TIMEOUT_MS\);\s*await store\.list\(\);/);
   });
 
   it('a slow read after a good open is waited for, not marked unreadable (saves stay on)', async () => {
