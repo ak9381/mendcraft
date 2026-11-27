@@ -180,7 +180,8 @@ describe('device parser: review sim-2 orders', () => {
       const r = parseDeviceCommands(line, two)!;
       expect(r.intents.length).toBeGreaterThan(0);
       expect(r.intents.every((i) => i.deviceId === 'spk' && typeof i.volume === 'number')).toBe(true);
-      expect(parseDeviceCommands(line, lampsOnly)).toBeNull();
+      // With no speaker, nothing acts (review sim-4 §3: "speaker …" is said honestly, never a lamp).
+      expect(parseDeviceCommands(line, lampsOnly)?.intents ?? []).toEqual([]);
     });
 
   it('one clause per lamp: desk on, bedroom off (never both off)', () => {
