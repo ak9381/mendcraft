@@ -246,6 +246,8 @@ const EXEMPT_CLAUSE = new RegExp([
   String.raw`^(?:just\s+|please\s+)?(?:tap|press|use|say|try|drag|ask|open|pick|hold|click|choose|check|look|swipe|slide|go\s+to|point|wave|speak|keep|leave)\b`,
   // The past, not now: "Lamps were once lit with oil."
   String.raw`\b(?:was|were)\s+once\b|\bused\s+to\b|\bin\s+the\s+(?:past|old\s+days)\b`,
+  // A purpose that leads into her instruction: "To turn the lamp on, say …".
+  String.raw`^to\s+[a-z]+\b`,
   String.raw`^you\b(?!\s*(?:got\s+it|'?re\s+(?:all\s+)?(?:set|good\s+to\s+go)|are\s+(?:all\s+)?set))`,
   String.raw`^(?:i'?m|i\s+am|so|really)?\s*(?:glad|happy|delighted|pleased)\b|^(?:i\s+)?(?:hope|hopefully|wish)\b|^let\s+me\s+know\b`,
   String.raw`^my\s+favou?rite\b`,
@@ -429,7 +431,7 @@ export function promiseGuard(reply: string, asked = ''): { reply: string; replac
 }
 
 /** A clause that could still turn into a promise once its sentence ends. */
-const RISKY = new RegExp(String.raw`\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST})\b`, 'i');
+const RISKY = new RegExp(String.raw`^\s*(?:no|nope|nah|well|hmm|oh|actually|so|great|perfect|alright|good|done|there)\b[\s,!.—–-]*$|\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST})\b`, 'i');
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the

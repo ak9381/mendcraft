@@ -127,7 +127,24 @@ const ORDER_WORDS = new Set<string>([
 /** Words that are not in ORDER_WORDS (numbers are fine: a level). */
 function strayWords(t: string, devices: readonly DeviceRef[]): string[] {
   const label = new Set(devices.flatMap((d) => norm(d.label).split(' ')));
-  return t.split(' ').filter((w) => w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w));
+  const words = t.split(' ');
+  const stray = (w: string) => !!w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w);
+  // A word naming which lamp ("the DESK lamp", "the BEDROOM light") is a
+  // qualifier, not talk: it is resolved against the devices (parseOne).
+  return words.filter((w, i) => stray(w) && !qualifierAt(words, i, stray));
+}
+const HEAD_NOUN = /^(?:lamps?|lights?|bulbs?|speakers?)$/;
+function qualifierAt(words: readonly string[], i: number, stray: (w: string) => boolean): boolean {
+  if (HEAD_NOUN.test(words[i + 1] ?? '')) return true;
+  return stray(words[i + 1] ?? '') && HEAD_NOUN.test(words[i + 2] ?? '');
+}
+/** The words naming which lamp that no device's label has ("kitchen" in
+ *  "turn on the kitchen lamp"), or '' when there are none. */
+function unknownQualifier(t: string, devices: readonly DeviceRef[]): string {
+  const label = new Set(devices.flatMap((d) => norm(d.label).split(' ')));
+  const words = t.split(' ');
+  const stray = (w: string) => !!w && !ORDER_WORDS.has(w) && !label.has(w) && !/^\d+$/.test(w);
+  return words.filter((w, i) => stray(w) && qualifierAt(words, i, stray)).join(' ');
 }
 
 /** True when the line has the shape of a device order: a leading command verb,
@@ -155,7 +172,10 @@ export function isDeviceCommandShape(text: string, devices: readonly DeviceRef[]
   // A short device phrase: its first content word is a device word or a word of a device's label.
   if (words.length > 6) return false;
   const labelWords = new Set(devices.flatMap((d) => norm(d.label).split(' ')).filter((w) => w && !COMMON.has(w)));
-  const head = words.find((w) => !DETERMINERS.has(w));
+  const lbl = new Set(devices.flatMap((d) => norm(d.label).split(' ')));
+  const strayW = (w: string) => !!w && !ORDER_WORDS.has(w) && !lbl.has(w) && !/^\d+$/.test(w);
+  // "desk lamp off" with a lamp called "Lamp": the qualifier is not the head.
+  const head = words.find((w, i) => !DETERMINERS.has(w) && !(strayW(w) && qualifierAt(words, i, strayW)));
   if (!head || !(SHORT_HEADS.has(head) || labelWords.has(head))) return false;
   // "the lamps on" is "the lamp's on" heard without its apostrophe: a report.
   if (/^the \w+s (?:on|off|out)$/.test(words.join(' '))) return false;
@@ -240,7 +260,17 @@ function parseOne(text: string, t: string, devices: readonly DeviceRef[], opts?:
     }
   }
 
-  const matched = matchDevices(t, lamps);
+  let matched = matchDevices(t, lamps);
+  // "turn on the desk lamp" when the only lamp is called "Lamp": that lamp.
+  // With several lamps and none called that: say so, never guess, never chat.
+  const qualifier = unknownQualifier(t, devices);
+  if (qualifier && lamps.length) {
+    const named = matched.filter((d) => norm(d.label).split(' ').some((w) => !COMMON.has(w)));
+    if (!named.length) {
+      if (lamps.length === 1) matched = lamps.slice();
+      else return { intents: [], say: `There's no ${qualifier} lamp here — there's ${lamps.map((d) => `the ${d.label}`).join(' and ')}. Say which one.` };
+    }
+  }
   // A music word with no lamp named is about the speaker: never the lamps
   // (with no speaker connected, "volume 40 percent" does nothing here).
   if (!matched.length && /\b(music|song|songs|speaker|speakers|volume|track)\b/.test(t)) return null;
