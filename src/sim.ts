@@ -10,6 +10,7 @@ import type { HandEvent } from './input/hands';
 export { playControlDemo } from './relay/controlSnapshot';
 
 export const SIM_ACTIVE =
+  (import.meta.env.DEV || import.meta.env.VITE_E2E === '1') &&
   typeof window !== 'undefined' &&
   new URLSearchParams(window.location.search).get('sim') === '1';
 

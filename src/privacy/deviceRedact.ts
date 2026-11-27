@@ -50,6 +50,38 @@ export function redactDeviceIds(text: string, ids: readonly string[], session: D
   return out;
 }
 
+/** Every device id anywhere on a board: device tiles, form bindings and
+ *  visual actions alike (any `deviceId` string, at any depth). */
+export function boardDeviceIds(plan: unknown): string[] {
+  const out: string[] = [];
+  const visit = (n: unknown): void => {
+    if (Array.isArray(n)) { n.forEach(visit); return; }
+    if (!n || typeof n !== 'object') return;
+    for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+      if (k === 'deviceId' && typeof v === 'string' && v && !out.includes(v)) out.push(v);
+      else visit(v);
+    }
+  };
+  visit(plan);
+  return out;
+}
+
+/** Put real device ids back in `deviceId` fields only (tiles, bindings,
+ *  actions, at any depth): a title or label that says "Device 1" keeps its
+ *  words (final review M7). A token this session never assigned stays. */
+export function restoreDeviceIdFields<T>(value: T, session: DeviceIdSession): T {
+  const visit = (n: unknown): unknown => {
+    if (Array.isArray(n)) return n.map(visit);
+    if (!n || typeof n !== 'object') return n;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+      out[k] = k === 'deviceId' && typeof v === 'string' && /^Device \d+$/.test(v) ? (session.idFor(v) ?? v) : visit(v);
+    }
+    return out;
+  };
+  return visit(value) as T;
+}
+
 /** Put real device ids back wherever a reply used their "Device N" token —
  *  the reply-side mirror of redactDeviceIds, so a plan Gemini drafted still
  *  binds to the real device once it's applied locally. */

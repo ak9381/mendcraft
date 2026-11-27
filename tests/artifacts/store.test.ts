@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import {
-  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore,
+  ARTIFACT_DB_NAME, STORE_FALLBACK_LINE, createIdbArtifactStore, createMemoryArtifactStore, loadArtifacts, openArtifactStore, STORE_OPEN_TIMEOUT_MS, withinRunningTime,
 } from '../../src/artifacts/store';
 import { ARTIFACT_MAX_COUNT } from '../../src/artifacts/artifact';
 import { board } from './sample';
@@ -70,6 +71,57 @@ describe('ArtifactStore', () => {
     await r.store.put(board('f1'));
     expect(await r.store.list()).toHaveLength(1);
     expect(STORE_FALLBACK_LINE).toBe("This browser can't keep boards. They last until you close the tab.");
+  });
+
+  it('falls back to memory (with the honest note) when indexedDB.open never answers (final review I13)', async () => {
+    vi.useFakeTimers();
+    try {
+      g.indexedDB = { open: () => ({}) }; // a request that never fires onsuccess / onerror
+      const p = openArtifactStore();
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
+      const r = await p;
+      expect(r.persistent).toBe(false);
+      await r.store.put(board('f1'));
+      expect(await r.store.list()).toHaveLength(1);
+      expect(STORE_OPEN_TIMEOUT_MS).toBe(3000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a frozen host (one late tick) does not use up the wait: the open still lands on IndexedDB', async () => {
+    vi.useFakeTimers();
+    try {
+      let answer: (v: string) => void = () => {};
+      const p = withinRunningTime(new Promise<string>((r) => { answer = r; }), STORE_OPEN_TIMEOUT_MS);
+      // Freeze: the clock jumps 10 s with no tick in between, then one late tick.
+      vi.setSystemTime(Date.now() + 10_000);
+      await vi.advanceTimersByTimeAsync(250);
+      answer('opened');
+      expect(await p).toBe('opened');
+      // Running time still runs out.
+      const q = withinRunningTime(new Promise<never>(() => {}), STORE_OPEN_TIMEOUT_MS);
+      const settled = q.catch((e: Error) => e.message);
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS);
+      expect(await settled).toBe('IndexedDB did not answer');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('only the open is timed: boot then waits for the first read (final review I13)', () => {
+    const src = readFileSync(new URL('../../src/artifacts/store.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/await withinRunningTime\(store\.ready\(\), STORE_OPEN_TIMEOUT_MS\);\s*await store\.list\(\);/);
+  });
+
+  it('a slow read after a good open is waited for, not marked unreadable (saves stay on)', async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = { ...createMemoryArtifactStore([board('f1')]) };
+      const list = slow.list;
+      slow.list = () => new Promise((r) => setTimeout(() => { void list().then(r); }, STORE_OPEN_TIMEOUT_MS * 2));
+      const p = loadArtifacts(slow);
+      await vi.advanceTimersByTimeAsync(STORE_OPEN_TIMEOUT_MS * 2);
+      const r = await p;
+      expect(r.readFailed).toBeUndefined();
+      expect(r.ok).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('opens the IndexedDB store when it works', async () => {

@@ -33,7 +33,7 @@ export function createMemoryArtifactStore(initial: Artifact[] = []): ArtifactSto
 
 export function createIdbArtifactStore(
   idb: IDBFactory | undefined = typeof indexedDB !== 'undefined' ? indexedDB : undefined,
-): ArtifactStore {
+): ArtifactStore & { ready(): Promise<unknown> } {
   let opened: Promise<IDBDatabase> | null = null;
   function open(): Promise<IDBDatabase> {
     if (!idb) return Promise.reject(new Error('no IndexedDB'));
@@ -80,6 +80,7 @@ export function createIdbArtifactStore(
     });
   }
   return {
+    ready: () => open(),
     list: () => tx('readonly', (s) => s.getAll(), (r) => ((r?.result as Artifact[] | undefined) ?? [])),
     put: (a) => tx('readwrite', (s) => s.put(clone(a))),
     remove: (id) => tx('readwrite', (s) => s.delete(id)),
@@ -87,12 +88,38 @@ export function createIdbArtifactStore(
   };
 }
 
-/** IndexedDB when it opens and answers; else memory (`persistent: false`). */
+/** How long boot waits for `indexedDB.open` to answer. Some iOS webviews
+ *  never answer it: the canvas then opens on the memory store and says so,
+ *  instead of never mounting (final review I13). Only the open is timed: a
+ *  first read that waits behind another tab's write is slow, not broken, and
+ *  is waited for (timing it would hide her stored boards). */
+export const STORE_OPEN_TIMEOUT_MS = 3000;
+const TICK_MS = 250;
+/** `p`, or a rejection once `ms` of running time has passed with no answer.
+ *  Time the page was frozen (a busy or suspended host: a tick that comes far
+ *  too late) is not counted — IndexedDB could not answer then either, and a
+ *  slow open must not cost her stored boards. */
+export function withinRunningTime<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let waited = 0;
+    let last = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      waited += Math.min(now - last, TICK_MS);
+      last = now;
+      if (waited >= ms) { clearInterval(timer); reject(new Error('IndexedDB did not answer')); }
+    }, TICK_MS);
+    p.then((v) => { clearInterval(timer); resolve(v); }, (e: unknown) => { clearInterval(timer); reject(e); });
+  });
+}
+
+/** IndexedDB when it opens in time and answers; else memory (`persistent: false`). */
 export async function openArtifactStore(): Promise<{ store: ArtifactStore; persistent: boolean }> {
   try {
     const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
     if (!idb) throw new Error('no IndexedDB');
     const store = createIdbArtifactStore(idb);
+    await withinRunningTime(store.ready(), STORE_OPEN_TIMEOUT_MS);
     await store.list();
     return { store, persistent: true };
   } catch {

@@ -113,6 +113,17 @@ describe('when kept steps are asked for again', () => {
   });
 });
 
+describe('a cloud steps call is booked and redacted (final review I8)', () => {
+  it('Gemini writing the steps opens a ledger turn, sends the redacted prompt and books each call that leaves', () => {
+    const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
+    const fn = app.slice(app.indexOf('async function requestSteps('), app.indexOf('function isKnownAsk('));
+    expect(fn).toContain("const prompt = cloud ? protectTurn('', asked).promptText : asked;");
+    expect(fn).toContain('if (cloud && !engine.sim) openCloudTurn(si, prompt);');
+    expect(fn).toMatch(/engine\.stream\(prompt, [^\n]*onCloudSend: \(\) => cloudSent\(si\), onCloudRetract: \(\) => cloudRetract\(si\)/);
+    expect(fn.indexOf('openCloudTurn(si, prompt)')).toBeLessThan(fn.indexOf('engine.stream('));
+  });
+});
+
 describe('which engine writes them', () => {
   const nano = { id: 'nano' }, gemini = { id: 'gemini' }, cloudNano = { id: 'gemini' };
   it('Nano first; Gemini only with no Nano and online; none otherwise', () => {

@@ -47,11 +47,12 @@ const testBuild = import.meta.env.DEV || import.meta.env.VITE_E2E === '1';
 const recordOn = testBuild && params.get('record') === '1' && params.get('sim') === '1';
 /** Replay engines answer from recorded replies only in a test build with ?sim=1. */
 const replayOn = testBuild && params.get('sim') === '1' && !recordOn;
-/** ?sim=1 means no live model — except while recording. */
-const noLiveModel = params.has('sim') && !recordOn;
+/** ?sim=1 means no live model — except while recording. Test builds only:
+ *  in production ?sim is an ordinary address (final review I12). */
+const noLiveModel = testBuild && params.has('sim') && !recordOn;
 /** A SIM run: simulated devices and phones, no WiZ discovery, no Spotify, no
  *  real relay (canvasApp's `sim`). Recording always is one. */
-const simRun = params.has('sim') || recordOn;
+const simRun = testBuild && (params.has('sim') || recordOn);
 type Recorded = RecordedMeta & { recordedAt: string; source: 'recorded'; reply: string };
 type McWindow = Window & { __mcCanvas?: unknown; __mcArtifacts?: unknown; __mcFixtures?: { replies?: Record<string, string>; recorded?: string[]; liveShape?: string[]; devices?: unknown }; __mcRecorded?: Record<string, Recorded>; __mcRecording?: { inFlight: number; skipped: string[] } };
 const mcWindow = window as McWindow;
@@ -327,7 +328,7 @@ function persistDoc(doc: CanvasDoc): void {
 function keepOne(a: Artifact): void {
   const prev = artifacts.find((x) => x.id === a.id);
   artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
-  if (loaded.readFailed) return;
+  if (loaded.readFailed || reloading) return;
   void artifactStore.put(a).then(saveOk, (e) => {
     console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`);
     saveFailed({ put: a, prev });

@@ -24,7 +24,7 @@ import { captureCrop, findLiveVideo, openCameraOnce } from './pointCapture';
 import { palmCenter, PHONE_HAND_FEEL, phoneReach } from './handFeel';
 import { buildIdentifyPrompt } from '../devices/identify';
 import { lampStep } from './deviceGuard';
-import { guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
+import { CHAT_ENGLISH_ONLY, guardSafePrefix, openEndedAsk, promiseGuard } from './openEndedAsk';
 import { PLAN_EDIT_FAIL, runPlanEditTurn, planRooms } from './planEdit';
 import type { PlanDoc } from '../plan/doc';
 import { cleanReply, createSentenceFeed } from './liveReply';
@@ -96,7 +96,7 @@ import { OFFLINE_QUICK_ONLY } from '../ux/wording';
 import { ROUTE_LINES } from '../ux/routeCatalog';
 import { resolveLanguage } from '../ai/language';
 import { activePeople, fillVisible, protectTurn } from '../privacy/directory';
-import { createDeviceIdSession } from '../privacy/deviceRedact';
+import { boardDeviceIds, createDeviceIdSession, redactDeviceIds } from '../privacy/deviceRedact';
 import { attachPrivacyHub } from '../relay/privacyHub';
 import { mountPhoneMenu } from './phoneMenu';
 import { armedSurfaceAt, collectControls, createHandPointer, deepElementFromPoint, mapToScreen, REACH, type HandPointer } from './handPointer';
@@ -143,7 +143,7 @@ import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from 
 import { routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
-import { identifyDevice, onNanoBusyHandoff, type VisionTrace } from '../ai/hybrid';
+import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
 import { buildMixedSwarmPlan, buildSwarmAgents, createSwarmLayer, type SwarmKind, type SwarmLayer, type SwarmPlanInput, type SwarmTask } from './swarmAgents';
 import { mountSwarmDock, type SwarmDockUi } from './swarmDock';
 import { mountMorphCard } from './morphCard';
@@ -1502,8 +1502,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     stepsAsking = true;
     const log = (line: string) => panels.forEngine(engine.id).log('note', line);
     try {
-      const prompt = stepsPrompt(at, facts);
-      const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200 });
+      // A cloud steps call (no Nano here) is redacted and booked in the
+      // ledger like every other turn (final review I8); Nano's stays here.
+      const cloud = engine.id === 'gemini';
+      const asked = stepsPrompt(at, facts);
+      const prompt = cloud ? protectTurn('', asked).promptText : asked;
+      const why = 'Gemini · cloud — no Nano here, so Deep wrote the next steps (counts only, no names)';
+      const si: SentInfo = { engine: engine.id, prompt, sent: cloud ? 'the step she is at and how many devices, boards and phones' : null, routeLine: engine.routeLine ?? (engine.sim ? `SIM · ${why}` : why), sim: engine.sim };
+      if (cloud && !engine.sim) openCloudTurn(si, prompt);
+      else if (cloud) recordSent(si, prompt);
+      const full = await engine.stream(prompt, () => {}, { shape: 'json', constraint: STEPS_CONSTRAINT, maxChars: 1200, ...(cloud ? { onCloudSend: () => cloudSent(si), onCloudRetract: () => cloudRetract(si) } : {}) });
       const raw = extractJson(full);
       // The step is ours, not the reply's: what she is at decides where they show.
       const r = coerceNextSteps(raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as object), at, sig } : raw, { isKnownAsk });
@@ -5491,7 +5499,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         sent: cloud ? 'your words (names redacted). No board data, no device addresses.' : null,
         routeLine: eng.sim && !base.startsWith('SIM') ? `SIM · ${base}` : base,
       };
-      aiSent(text, si, { swarm: false, defer: true });
+      // The cloud adapter adds a reply-format line to a chat call: booked too.
+      aiSent(text, si, { swarm: false, defer: true, ...(cloud ? { extraBytes: utf8ByteLength(TEXT_REPLY_SUFFIX) } : {}) });
       return { prompt: cloud ? protectTurn(text, prompt).promptText : prompt, onCloudSend: () => cloudSent(si) };
     };
     let r: Awaited<ReturnType<typeof openEndedAsk>>;
@@ -5525,7 +5534,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const reply = guarded.reply;
     // The cloud terminal keeps what the cloud actually said (tokens, not names).
     panels.forEngine(r.engineId).log(r.engineId === 'gemini' ? 'replied' : 'done', r.reply);
-    if (guarded.replaced) panels.forEngine(r.engineId).log('note', 'the reply promised an action chat can’t take, so an honest line was shown instead');
+    if (guarded.replaced) panels.forEngine(r.engineId).log('note', guarded.reply === CHAT_ENGLISH_ONLY ? 'the reply was not in English, so it could not be checked and a fixed line was shown instead' : 'the reply promised an action chat can’t take, so an honest line was shown instead');
     aiPanel.querySelector('.mc-ai-state')!.textContent = cleanReply(reply);
     // A safe start of the reply may already be on screen / being said: the
     // honest line then starts afresh and cuts it off.
@@ -6498,9 +6507,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           spec: target.spec,
           tileId: target.id,
           log: tileSelfCheckLog,
-          requestFix: async (prompt) => {
+          requestFix: async (raw) => {
             const eng = engineFor('gemini', 'selfCheck');
             if (!eng) throw new Error(NO_MODEL_LINE);
+            // The tile's real device ids never reach the cloud (final review I7);
+            // parseMorphTile puts them back from the same session.
+            const prompt = eng.id === 'gemini' ? redactDeviceIds(raw, boardDeviceIds(target.spec), deviceIdSession) : raw;
             const why = 'Gemini · cloud — a tile failed its own check, so Deep rewrote that one tile';
             const si: SentInfo = { engine: eng.id, prompt, sent: 'the tile dump and the problems', routeLine: eng.routeLine ?? (eng.sim ? `SIM · ${why}` : why), sim: eng.sim };
             if (!eng.sim && eng.id === 'gemini') openCloudTurn(si, prompt);
