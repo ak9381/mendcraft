@@ -31,7 +31,7 @@ import { joinCanvasDoc, LAYOUT_KEY, tooManyBoardsLine, unjoinedIds } from './can
 import { loadArtifacts, openArtifactStore, overCapLine, STORE_FALLBACK_LINE, STORE_READ_FAILED_LINE } from '../artifacts/store';
 import { frameIdOfArtifactId, type Artifact, type ArtifactBy } from '../artifacts/artifact';
 import type { CanvasDoc } from './frames';
-import { clearStoreForFresh, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, STORE_SAVE_OFF_LINE } from './canvasStore';
+import { clearStoreForFresh, createSaveFailNotice, loadLayout, loadLine, openFresh, reservedIds, revertFailedSave, saveCanvasDoc, STORE_SAVE_OFF_LINE, type SaveFailure } from './canvasStore';
 import { coerceSnapshot } from '../relay/controlSnapshot';
 
 const params = new URLSearchParams(location.search);
@@ -302,10 +302,31 @@ function boardMaker(frameId: string): ArtifactBy | undefined {
 /** Set once an import is about to reload the page: nothing more is saved
  *  (a save now could write the old board over the one just imported). */
 let reloading = false;
+/** A failed save is said once (until one works) and tried again on the next
+ *  change: the failed artifact is not counted as stored. */
+const saveFail = createSaveFailNotice();
+function saveFailed(f: SaveFailure): void {
+  artifacts = revertFailedSave(artifacts, f);
+  const line = saveFail.after(false);
+  if (line) handle?.say(line);
+}
+const saveOk = (): void => { saveFail.after(true); };
 function persistDoc(doc: CanvasDoc): void {
   if (reloading) return;
   artifacts = saveCanvasDoc(doc, artifacts, artifactMaker, Date.now(), keepIds, {
     layoutStorage, store: artifactStore, layoutBlocked: layoutSaveBlocked, storeBlocked: !!loaded.readFailed,
+    onFail: saveFailed, onOk: saveOk,
+  });
+}
+/** One artifact written on its own (a connector, next steps). Never to a
+ *  store that could not be read; a failure is said and retried like a save. */
+function keepOne(a: Artifact): void {
+  const prev = artifacts.find((x) => x.id === a.id);
+  artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
+  if (loaded.readFailed) return;
+  void artifactStore.put(a).then(saveOk, (e) => {
+    console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`);
+    saveFailed({ put: a, prev });
   });
 }
 
@@ -321,18 +342,11 @@ handle = mountCanvas(root, {
   connectors: artifacts.filter((a) => a.kind === 'connector'),
   // Language packs she approved (each checked again at load).
   packs: artifacts.filter((a) => a.kind === 'pack'),
-  onConnector: (a) => {
-    artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
-    void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
-  },
+  onConnector: keepOne,
   // Generated next-step suggestions (each checked again at load, in loadArtifacts).
   steps: artifacts.filter((a) => a.kind === 'steps'),
-  onSteps: (a) => {
-    artifacts = [...artifacts.filter((x) => x.id !== a.id), a];
-    // A store that could not be read is never written to this session.
-    if (loaded.readFailed) return;
-    void artifactStore.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
-  },
+  // A store that could not be read is never written to this session.
+  onSteps: keepOne,
   dropped: loaded.dropped,
   loadNotes: loaded.notes,
   // The Artifacts sheet: list, Remove, Export, Import (an import reloads, so

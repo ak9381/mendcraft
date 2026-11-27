@@ -147,6 +147,42 @@ export function openFresh(storage: Store | null, href: string): { fresh: boolean
  *  is written to it (or to the layout), so an unread board is never overwritten. */
 export const STORE_SAVE_OFF_LINE = 'Changes in this session won’t be saved. Reload to try again.';
 
+/** Said once when saving her boards fails (the browser refused the write). */
+export const SAVE_FAIL_LINE = 'Couldn’t save your boards — the browser refused to store them. Your next change tries again.';
+/** A save's result → the line to say, once: on the first failure, then not
+ *  again until a save has worked. */
+export function createSaveFailNotice(): { after(ok: boolean): string | null } {
+  let said = false;
+  return {
+    after(ok) {
+      if (ok) { said = false; return null; }
+      if (said) return null;
+      said = true;
+      return SAVE_FAIL_LINE;
+    },
+  };
+}
+
+/** One part of a save that did not happen: a put (and what was stored
+ *  before it), a remove (the artifact still stored), or the layout. */
+export type SaveFailure = { put: Artifact; prev: Artifact | undefined } | { removed: Artifact } | { layout: true };
+
+/** The session's artifact list after a failed part of a save: a failed put
+ *  is known as what was stored before it (so the next save puts it again),
+ *  unless a newer save of it has happened since; a failed remove is known as
+ *  still stored (so the next save removes it again). */
+export function revertFailedSave(artifacts: Artifact[], f: SaveFailure): Artifact[] {
+  if ('put' in f) {
+    const i = artifacts.findIndex((a) => a.id === f.put.id);
+    if (i < 0 || artifacts[i] !== f.put) return artifacts;
+    const out = [...artifacts];
+    if (f.prev) out[i] = f.prev; else out.splice(i, 1);
+    return out;
+  }
+  if ('removed' in f) return artifacts.some((a) => a.id === f.removed.id) ? artifacts : [...artifacts, f.removed];
+  return artifacts;
+}
+
 export interface SaveTargets {
   layoutStorage: Pick<Storage, 'setItem'> | null;
   store: { put(a: Artifact): Promise<void>; remove(id: string): Promise<void> };
@@ -155,6 +191,10 @@ export interface SaveTargets {
   /** The store couldn't be read: what it holds is unknown, so nothing is
    *  written to it (and the layout, which points at it, is left as it was). */
   storeBlocked: boolean;
+  /** A part of this save failed (called later for the store's writes). */
+  onFail?: (f: SaveFailure) => void;
+  /** A store write of this save worked. */
+  onOk?: () => void;
 }
 
 /** One save of the canvas document: the layout, then the changed artifacts
@@ -163,11 +203,25 @@ export function saveCanvasDoc(doc: CanvasDoc, artifacts: Artifact[], by: (id: st
   if (t.storeBlocked) return artifacts;
   const out = splitCanvasDoc(doc, artifacts, by, now, keep);
   // A full localStorage (quota) must not stop the artifacts being kept.
-  try { if (!t.layoutBlocked) t.layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) { console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`); }
+  try { if (!t.layoutBlocked) t.layoutStorage?.setItem(LAYOUT_KEY, JSON.stringify(out.layout)); } catch (e) {
+    console.warn(`[mendcraft] couldn't keep the layout: ${e instanceof Error ? e.message : String(e)}`);
+    t.onFail?.({ layout: true });
+  }
   const gone = new Set(out.remove);
   const put = new Map(out.put.map((a) => [a.id, a]));
-  for (const a of out.put) void t.store.put(a).catch((e) => console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`));
-  for (const id of out.remove) void t.store.remove(id).catch(() => undefined);
+  const before = new Map(artifacts.map((a) => [a.id, a]));
+  // A write that fails is handed back (onFail), so the session does not count
+  // it as stored and the next save tries it again.
+  for (const a of out.put) {
+    void t.store.put(a).then(() => t.onOk?.(), (e) => {
+      console.warn(`[mendcraft] couldn't keep ${a.id}: ${e instanceof Error ? e.message : String(e)}`);
+      t.onFail?.({ put: a, prev: before.get(a.id) });
+    });
+  }
+  for (const id of out.remove) {
+    const was = before.get(id);
+    void t.store.remove(id).then(() => t.onOk?.(), () => { if (was) t.onFail?.({ removed: was }); });
+  }
   return [...artifacts.filter((a) => !gone.has(a.id) && !put.has(a.id)), ...put.values()];
 }
 

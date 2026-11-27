@@ -11,7 +11,7 @@ import { coerceLayout } from '../../src/canvas/canvasPersistence';
 import {
   BEFORE_FRESH_KEY, CANVAS_STORAGE_KEY, DEVICES_BOARD_KEY, FRESH_SLOTS, MAX_UNREADABLE, REPAIR_SLOTS,
   UNREADABLE_KEY, UNREADABLE_LINE, UNSAVED_LINE,
-  BEFORE_FRESH_ARTIFACTS_KEY, BEFORE_FRESH_MAX_CHARS, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
+  BEFORE_FRESH_ARTIFACTS_KEY, BEFORE_FRESH_MAX_CHARS, SAVE_FAIL_LINE, createSaveFailNotice, revertFailedSave, clearStoreForFresh, keepUnreadable, loadLayout, loadLine, openFresh, reservedIds, saveCanvasDoc, startFresh, withoutFresh, STORE_SAVE_OFF_LINE,
 } from '../../src/canvas/canvasStore';
 
 function memStorage(init: Record<string, string> = {}) {
@@ -231,3 +231,60 @@ describe('a test build’s ?fresh copies the stored artifacts aside before clear
     expect(b.cleared).toBe(false);
   });
 });
+
+describe('I4: a failed save is said once and tried again on the next change', () => {
+  const rect = { x: 0, y: 0, w: 1000, h: 680 };
+  const frames = [{ id: 'f1', kind: 'room' as const, title: 'Desk', rect, pinned: false }];
+  const docWith = (label: string) => ({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1', frames, surfaces: { f1: { kind: 'room' as const, title: 'Desk', tiles: [{ type: 'stat' as const, label, value: '1' }] } } });
+  const flushAll = () => new Promise((r) => setTimeout(r, 0));
+
+  it('a put that fails is handed back; reverted, the next save puts it again', async () => {
+    let fail = true;
+    const puts: Array<{ id: string; v: number }> = [];
+    const failed: unknown[] = [];
+    const t = {
+      layoutStorage: { setItem: () => undefined },
+      store: { put: async (a: { id: string; v: number }) => { if (fail) throw new Error('QuotaExceededError'); puts.push({ id: a.id, v: a.v }); }, remove: async () => undefined },
+      layoutBlocked: false, storeBlocked: false,
+      onFail: (f: unknown) => { failed.push(f); },
+    };
+    let artifacts = saveCanvasDoc(docWith('A') as never, [], () => 'person', 1, new Set(), t as never);
+    expect(artifacts.map((a) => a.id)).toEqual(['board-f1']);
+    await flushAll();
+    expect(failed).toHaveLength(1);
+    for (const f of failed) artifacts = revertFailedSave(artifacts, f as never);
+    expect(artifacts).toEqual([]); // never stored: not known as saved
+    fail = false;
+    artifacts = saveCanvasDoc(docWith('A') as never, artifacts, () => 'person', 2, new Set(), t as never);
+    await flushAll();
+    expect(puts).toEqual([{ id: 'board-f1', v: 1 }]);
+  });
+
+  it('a newer save of the same board is not undone by an older failure', () => {
+    const a1 = { id: 'board-f1', v: 1 } as never;
+    const a2 = { id: 'board-f1', v: 2 } as never;
+    expect(revertFailedSave([a2], { put: a1, prev: undefined })).toEqual([a2]);
+    const prev = { id: 'board-f1', v: 1, by: 'gemini' } as never;
+    expect(revertFailedSave([a2], { put: a2, prev })).toEqual([prev]);
+  });
+
+  it('a failed layout write is a failure too', () => {
+    const failed: unknown[] = [];
+    saveCanvasDoc(docWith('A') as never, [], () => 'person', 1, new Set(), {
+      layoutStorage: { setItem: () => { throw new Error('quota'); } },
+      store: { put: async () => undefined, remove: async () => undefined },
+      layoutBlocked: false, storeBlocked: false, onFail: (f: unknown) => failed.push(f),
+    } as never);
+    expect(failed).toEqual([{ layout: true }]);
+  });
+
+  it('the notice says one line on the first failure, then not again until a save works', () => {
+    const n = createSaveFailNotice();
+    expect(n.after(false)).toBe(SAVE_FAIL_LINE);
+    expect(n.after(false)).toBeNull();
+    expect(n.after(true)).toBeNull();
+    expect(n.after(false)).toBe(SAVE_FAIL_LINE);
+    expect(SAVE_FAIL_LINE).toMatch(/^Couldn’t save your boards — /);
+  });
+});
+
