@@ -15,7 +15,7 @@ export function buildOpenEndedPrompt(text: string): string {
 }
 /** Chat can't act: it never touches a board, a device or the plan, so the
  *  model is told so — and promiseGuard() below catches it when it forgets. */
-export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did. Reply in English: one or two short, friendly sentences, no emoji.';
+export const OPEN_ENDED_INSTRUCTION = 'You can only chat; you never change boards, devices or plans, or call, message, order, book or remind anyone, so never say you will or did, nor what state a device is in. Reply in English: one or two short, friendly sentences, no emoji.';
 
 /** What replaces a reply that promised an action chat cannot do — a plan
  *  ask gets the plan's own way in; anything else, the board's buttons. */
@@ -232,17 +232,99 @@ const ASSERT_RULES: RegExp[] = [
   // "Blue it is.", "Warm white it is!"
   /^(?!(?:that|this|so|there|here|what|how|true|such|yes|indeed)\b)(?:[\w'-]+\s+){1,2}it\s+is\s*[.!]*$/i,
 ];
-/** A sentence that is a question, a condition, a wish or feeling, or only
- *  says what she could say or tap: not a claim about a state. */
-const NOT_ASSERTED = /\?\s*$|\b(?:favou?rite|if|when|whether|unless|once|until|glad|hope|hopefully|wish|imagin\w*|pretend|dream\w*|can'?t\s+(?:tell|see|know)|don'?t\s+know|not\s+sure)\b|^(?:tap|say|try|check|press|use|ask|you\s+can|to\s+\w+)\b/i;
+// ── Exemptions, per clause (final review 4) ─────────────────────────────
+// A clause is exempt only by how IT starts: a condition that instructs her
+// ("If the lamp is off, …"), "I can't / I'm not able to / I don't know …",
+// an instruction to her ("tap the lamp tile"), something SHE did ("you set
+// up…"), a feeling ("I'm glad…", "hope that helps"), a generic gerund
+// ("Dimming the lights at night helps sleep"). A whole sentence is exempt
+// only when it is a question. A trailing "hope that helps" or "when you
+// asked" never exempts the clause that holds the claim.
+const EXEMPT_CLAUSE = new RegExp([
+  String.raw`^(?:if|when|whenever|whether|once|unless|until|in\s+case|before|after)\b`,
+  String.raw`^(?:i\s+can'?t|i\s+cannot|i\s+can\s+only|i'?m\s+not\s+able|i\s+am\s+not\s+able|i\s+(?:don'?t|do\s+not)\s+know|i'?m\s+not\s+sure|i\s+am\s+not\s+sure|i\s+(?:don'?t|do\s+not)\s+have|i\s+have\s+no\s+way|not\s+sure|i\s+(?:can'?t|cannot)\s+(?:see|tell))\b`,
+  String.raw`^(?:just\s+|please\s+)?(?:tap|press|use|say|try|drag|ask|open|pick|hold|click|choose|check|look|swipe|slide|go\s+to|point|wave|speak|keep|leave)\b`,
+  // The past, not now: "Lamps were once lit with oil."
+  String.raw`\b(?:was|were)\s+once\b|\bused\s+to\b|\bin\s+the\s+(?:past|old\s+days)\b`,
+  String.raw`^you\b(?!\s*(?:got\s+it|'?re\s+(?:all\s+)?(?:set|good\s+to\s+go)|are\s+(?:all\s+)?set))`,
+  String.raw`^(?:i'?m|i\s+am|so|really)?\s*(?:glad|happy|delighted|pleased)\b|^(?:i\s+)?(?:hope|hopefully|wish)\b|^let\s+me\s+know\b`,
+  String.raw`^my\s+favou?rite\b`,
+  // A generic statement ("A lamp that is on all day uses more power") — not
+  // one that says something changed ("A new tile is on…", "A room was added").
+  String.raw`^(?:a|an)\s+(?![^,;]*\b(?:new|now|was|were|has\s+been|have\s+been|added|created|moved|removed|turned|switched)\b)`,
+  // Advice: "around 70% brightness is comfortable".
+  String.raw`\b(?:around|about|roughly|between|up\s+to)\s+\d+`,
+  String.raw`\bin\s+my\s+(?:imagination|head|mind|dreams?)\b`,
+  String.raw`^(?!(?:every|no|some|any)thing\b|morning|evening|ceiling)[a-z]+ing\b(?:\s+[\w'-]+){0,5}\s+(?:helps?|is|are|can|could|takes?|makes?|sets?|feels?|works?|keeps?|saves?|gives?|brings?|creates?|matters?)\b`,
+].join('|'), 'i');
+const CLAUSE_LEAD = /^(?:(?:okay|ok|sure(?!\s+thing)|yes|yeah|great|alright|absolutely|perfect|no\s+problem|got\s+it|and|so|well|but|also|then|there\s+(?:you|we)\s+(?:are|go)|here\s+you\s+go|all\s+good|sorted)\b[,!.—–\s]*)+/i;
 function sentencesOf(t: string): string[] {
   return t.replace(/["“][^"”]*["”]/g, '"…"').split(/(?<=[.!?;])\s+/).map((x) => x.trim()).filter(Boolean);
 }
-const LEAD_IN = /^(?:(?:okay|ok|sure(?!\s+thing)|yes|yeah|great|alright|absolutely|perfect|no\s+problem|got\s+it|and|so|well)\b[,!.—–\s]*)+/i;
+/** The reply with its questions and exempt clauses taken out: what it asserts. */
+function assertedText(t: string): string {
+  const out: string[] = [];
+  for (const sen of sentencesOf(t)) {
+    if (/\?\s*["”')]*\s*$/.test(sen)) continue;
+    const parts = sen.split(/(\s*[,;:—–]\s*|\s+-\s+)/);
+    let kept = '';
+    for (let i = 0; i < parts.length; i += 2) {
+      const clause = parts[i].trim();
+      const bare = clause.replace(CLAUSE_LEAD, '').trim();
+      if (bare && EXEMPT_CLAUSE.test(bare)) continue;
+      kept += (kept ? (parts[i - 1] ?? ' ') : '') + clause;
+    }
+    if (kept.trim()) out.push(kept.trim());
+  }
+  return out.join(' ');
+}
+
+// ── Thing + state (final review 4): conservative, high recall ─────────────
+// Open chat cannot see or change anything, so a clause that names an app
+// thing together with a state, action or result word is a claim.
+const APP_THINGS = String.raw`lamps?|lights?|bulbs?|speakers?|music|songs?|tracks?|playlists?|jazz|radio|albums?|tunes?|volume|brightness|colou?rs?|gimbal|stand|camera|boards?|tiles?|plans?|floor\s*plans?|rooms?|stud(?:y|ies)|kitchens?|bath\s*rooms?|bed\s*rooms?|bedroom\s+\w+|balcon(?:y|ies)|halls?|dashboards?|canvas|kannada|hindi|english|language|phones?|scenes?|modes?|timers?|reminders?|alarms?|sliders?|buttons?|fans?|plugs?|devices?|tv`;
+const NON_LOCATIVE = String.raw`(?!\s+(?:the|a|an|your|my|its|this|that|their|our|his|her|to|of|with|topic|track|duty|limits|guard|course|balance)\b)`;
+const STATE_WORDS = new RegExp([
+  String.raw`\b(?:on|off|(?<!turned\s)out)\b${NON_LOCATIVE}`,
+  String.raw`\b(?:set|turned(?!\s+out\b)|switched|changed|added|moved|removed|deleted|created|updated|saved|pinned|unpinned|paired|connected|linked|muted|unmuted|paused|stopped|started|skipped|queued|dimmed|brightened|raised|lowered|lit|enabled|active|ready|done(?!\s+by)|handled|sorted|playing|running|following|glowing|shining|blasting|holding|showing|now|new|maximum|max|full|half|percent)\b`,
+  String.raw`\btook\s+care\b|\btaken\s+care\b|\bwent\s+(?:up|down|off|out)\b|\bcame\s+on\b|\bat\s+\d+|\d+\s*%`,
+  // A comparative is a change only when something says so ("is wider now", "made it larger").
+  String.raw`\b(?:is|are|'s|'re|was|were|now|made|got|became|been)\b[^,;]*\b(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|bigger|larger|wider|smaller|lower|higher)\b`,
+].join('|'), 'i');
+const THING_RE = new RegExp(String.raw`\b(?:${APP_THINGS})\b`, 'i');
+const ACTION_PAST = 'turned|switched|dimmed|brightened|paused|muted|unmuted|skipped|stopped|started|changed|set|saved|added|moved|removed|pinned|connected|paired|updated|raised|lowered|queued|lit|done|sorted|handled|resumed|restarted|cleared|undone';
+const CLAUSE_CLAIMS: RegExp[] = [
+  // "Turned off, as you asked.", "Brightened it up.", "Switched on for you!"
+  new RegExp(String.raw`^(?:just\s+|now\s+|all\s+)?(?:${ACTION_PAST})\b(?!\s+(?:\d|a|an|the|your|my|some|up|is|are|was|by|in)\b)`, 'i'),
+  // "Off they go.", "On it goes."
+  /^(?:on|off|up|down)\s+(?:they|it|we)\s+go(?:es)?\b/i,
+  // A bare change word as the whole clause: "brighter", "all warmer now".
+  /^(?:all\s+)?(?:brighter|dimmer|warmer|cooler|louder|quieter|softer|on|off)(?:\s+now)?$/i,
+  // Out in the world: "Your table is booked for 8."
+  /\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|all\s+)?(?:booked|ordered|reserved|scheduled|cancell?ed|paid|delivered|sent|texted|emailed)\b/i,
+  // "It has been switched off.", "They've both been dimmed."
+  new RegExp(String.raw`\b(?:has|have|'s|'ve)\s+(?:\w+\s+)?been\s+(?:${ACTION_PAST}|${APP_PAST})\b`, 'i'),
+  // "Both of them are off now.", "It's switched off."
+  new RegExp(String.raw`\b(?:it|they|them|both|everything|all\s+of\s+them|both\s+of\s+them)\s*(?:is|are|'s|'re|seems?\s+to\s+be|appears?\s+to\s+be|looks?(?:\s+to\s+be)?)\s+(?:\w+\s+)?(?:on|off|out|playing|paused|muted|dimmed|switched\s+(?:on|off)|turned\s+(?:on|off))\b${NON_LOCATIVE}`, 'i'),
+  // "I took care of the lights.", "I've gone ahead and dimmed the lights.", "I went ahead and…"
+  new RegExp(String.raw`\b(?:i|we)\s*(?:'ve|\s+have|'d|\s+had)?\s+(?:just\s+|already\s+)?(?:gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:${ACTION_PAST}|${APP_PAST}|took\s+care|handled|sorted|took)\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing|the\s+page|a\s+corner|the\s+tables|over\s+a\s+new\s+leaf)\b)`, 'i'),
+];
+/** True when an asserted clause claims a state or an action on an app thing. */
+function thingStateClaim(clause: string): boolean {
+  // "Lights on Diwali": on + a name is a time or a place, not a state.
+  const c = clause.replace(CLAUSE_LEAD, '').trim().replace(/\b(?:on|off)\s+(?=\p{Lu}\p{Ll})/gu, 'during ');
+  if (!c) return false;
+  if (THING_RE.test(c) && STATE_WORDS.test(c)) return true;
+  return CLAUSE_CLAIMS.some((re) => re.test(c));
+}
+function clausesOf(t: string): string[] {
+  return t.split(/[.!;]+\s*|\s*[,:—–]\s*|\s+-\s+/).map((x) => x.trim()).filter(Boolean);
+}
+const LEAD_IN = CLAUSE_LEAD;
 /** True when a sentence asserts a device / board state (see above). */
 function assertsState(sentence: string): boolean {
   const s = sentence.replace(LEAD_IN, '').trim();
-  if (!s || NOT_ASSERTED.test(s)) return false;
+  if (!s) return false;
   return ASSERT_RULES.some((re) => re.test(s));
 }
 
@@ -275,7 +357,12 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
   if (PAST_CLAIMS.some((re) => re.test(t))) return true;
   // State claims are judged per sentence, never inside a question, a
   // condition or a wish ("If the lamp is off, tap its tile.").
-  if (sentencesOf(t).some((sen) => !NOT_ASSERTED.test(sen.replace(LEAD_IN, '').trim()) && (STATE_CLAIMS.some((re) => re.test(sen)) || assertsState(sen)))) return true;
+  // A label and its value: "Lamp brightness: 40%", "Volume: 30%", "Music: paused".
+  if (new RegExp(String.raw`(?:^|[.!;]\s*)(?:[\w'-]+\s+){0,2}(?:${APP_THINGS})\s*:\s*(?:\d+\s*%?|on|off|out|playing|paused|muted|ready|done|${COLOUR})\s*(?:[.!,;]|$)`, 'i').test(t)) return true;
+  const asserted = assertedText(t);
+  if (asserted && (STATE_CLAIMS.some((re) => re.test(asserted))
+    || sentencesOf(asserted).some(assertsState)
+    || clausesOf(asserted).some(thingStateClaim))) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
   return false;
 }
