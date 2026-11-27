@@ -2460,13 +2460,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     refitPlans(id); // the drawing fits the board as shown now (it may have been fitted at another zoom)
     if (!o.quiet) say(`Editing ${f.title}. Say “show everything” to zoom out.`);
   }
-  async function overview(): Promise<void> {
+  /** `quiet`: the hint is not said (the boot report must stay on screen). */
+  async function overview(o: { quiet?: boolean } = {}): Promise<void> {
     focusId = null; phoneOverview = phoneShell; sync(); clearDock();
     const list = reg.list();
     // Leave the hand cluster's lane on the right free (it sits on the edge).
     const v = vp();
     await flyTo(fitRects(list.map((f) => f.rect), { w: Math.max(320, v.w - clusterInset()), h: v.h }, Math.max(56, barH())));
-    say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
+    if (!o.quiet) say(list.length ? `${list.length} boards. Pick one, or say “go to …”.` : `Let's build something fun. Say “show tools” to get started.`);
   }
   function newBoard(): void {
     pairFirst.abandon();
@@ -6822,7 +6823,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   } else if (focusId) {
     void focus(focusId, { quiet: bootReported });
   } else if (!stored) {
-    void overview();
+    void overview({ quiet: bootReported });
   }
 
   // Hands + face are ON BY DEFAULT: the camera prompt appears right away and
