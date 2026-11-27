@@ -4,6 +4,7 @@
 // to messages from the OTHER role, so echoed self-messages are harmless.
 
 import {
+  codeVouchTag,
   advancePair,
   createCueLimiter,
   createModeLimiter,
@@ -288,6 +289,10 @@ export interface CreateHostOptions {
   token?: string;
   /** Clock for the gimbal-cue rate limit (tests). */
   now?: () => number;
+  /** Where the code this room has open is remembered beside the host token
+   *  (pairingStore.openCodeStore). A resumed room clears the remembered
+   *  code's alias first: a code left open by a reload never resolves again. */
+  openCode?: { load: () => string | null; save: (code: string | null) => void };
 }
 
 const RESUME_TOKEN_RE = /^[0-9A-Z]{24}$/;
@@ -304,6 +309,11 @@ export async function createHostSession(
   // The short code is a separate secret (crypto random, whatever `random` is):
   // the token can't be worked out from it, and it changes with each window.
   let code = generatePairCode();
+  const openStore = opts.openCode;
+  if (token === opts.token && openStore) {
+    const left = openStore.load();
+    if (left && left !== code) await inTime(transport.clearAlias(left)).catch(() => undefined);
+  }
   const core = makeCore('host', transport, token);
   const sid = Array.from(random(6), (b) => (b % 36).toString(36)).join('') + Date.now().toString(36);
   const now = opts.now ?? (() => Date.now());
@@ -332,7 +342,19 @@ export async function createHostSession(
     if (aliasCleared) return;
     aliasCleared = true;
     admitting = false;
-    await transport.clearAlias(code).catch(() => undefined);
+    const was = code;
+    await transport.clearAlias(was).then(() => {
+      if (openStore?.load() === was) openStore.save(null);
+    }, () => undefined);
+  }
+  /** Open the alias for the current code: remembered first (a crash right
+   *  after still leaves a trace to clear), then vouched for by a 'codeOpen'
+   *  host message that names this code's tag — only that vouches for it. */
+  async function openAlias(): Promise<void> {
+    openStore?.save(code);
+    await transport.setAlias(code, token);
+    const tag = await codeVouchTag(code, token);
+    await transport.publish(token, { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'codeOpen', text: tag } }).catch(() => undefined);
   }
   /** Open a window: a code that is still open is kept (the card shows it); a
    *  retired one is replaced by a new code — an old code never comes back. */
@@ -455,7 +477,7 @@ export async function createHostSession(
   // history and never acts.
   const whoMsg: RelayMessage = { v: 1, from: 'host', type: 'cmd', cmd: { kind: 'whoIsThere', text: sid } };
   void core.markStart(() => (transport.publishStamped ? transport.publishStamped(token, whoMsg) : transport.publish(token, whoMsg)));
-  try { await inTime(transport.setAlias(code, token)); } catch (e) {
+  try { await inTime(openAlias()); } catch (e) {
     clearTimeout(aliasTimer);
     await core.close({ silent: true });
     throw e;
@@ -532,10 +554,9 @@ export async function createHostSession(
       openWindow();
       admitting = true;
       aliasTimer = setTimeout(() => void clearAliasOnce(), ALIAS_TTL_MS);
-      await transport.setAlias(code, token);
-      // A fresh host message vouches for the reopened code (resolveRoomId
-      // only honours a code whose host spoke within ALIAS_TTL_MS).
-      await transport.publish(token, whoMsg).catch(() => undefined);
+      // A 'codeOpen' naming this code vouches for it (resolveRoomId only
+      // honours a code opened within ALIAS_TTL_MS).
+      await openAlias();
     },
     endAdmission: async () => {
       clearTimeout(aliasTimer);

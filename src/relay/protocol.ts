@@ -207,6 +207,11 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     session it already knows). Sent when it changes, ≥ ATTENTION_MIN_GAP_MS
 //     apart (the latest value always goes out). Phones only honour it from
 //     the host.
+//   • 'codeOpen' — host → room: "this short code was opened now". text: the
+//     code's tag (codeVouchTag: a hash of code + room token, never the code).
+//     The alias doc can hold only {room}, so this is what vouches for ONE
+//     code: a phone typing a code accepts it only when a host opened THAT
+//     code within ALIAS_TTL_MS. Phones ignore it otherwise.
 //   • 'ping' — phone → host: "are you really there?". text: JSON {n, sid?} —
 //     n is the phone's one-time nonce, sid the host session it believes it is
 //     talking to. 'pong' — host → phone: JSON {n, sid} echoing the nonce with
@@ -215,7 +220,7 @@ export type RelayRole = 'host' | 'phone' | 'control';
 //     message in the room is not. Handled inside the sessions.
 export type RelayCommandKind =
   | 'undo' | 'redo' | 'command' | 'nudge' | 'mic' | 'transfer' | 'announce' | 'aiEvent' | 'whoIsThere'
-  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong' | 'attention';
+  | 'sensePoint' | 'pointResult' | 'gimbalCue' | 'gimbalMode' | 'ping' | 'pong' | 'attention' | 'codeOpen';
 
 /** The only DockKit animations the laptop may ask for (no user content). */
 export type GimbalCueKind = 'yes' | 'no' | 'wakeup';
@@ -414,7 +419,7 @@ export type RelayMessage =
   /** Hub → phone: names filled back, plus the route line and Gemini byte count. */
   | { v: 1; from: 'host'; type: 'privacyReply'; reply: PrivacyReply };
 
-const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong', 'attention'];
+const COMMAND_KINDS: readonly string[] = ['undo', 'redo', 'command', 'nudge', 'mic', 'transfer', 'announce', 'aiEvent', 'whoIsThere', 'sensePoint', 'pointResult', 'gimbalCue', 'gimbalMode', 'ping', 'pong', 'attention', 'codeOpen'];
 /** Kinds whose `text` is a JSON payload (parsed by the canvas), not an utterance. */
 const JSON_KINDS: readonly string[] = ['transfer', 'announce', 'aiEvent', 'sensePoint', 'pointResult', 'ping', 'pong'];
 
@@ -434,6 +439,8 @@ export function validateCommand(raw: unknown): RelayCommand | null {
   if ((c.kind === 'ping' || c.kind === 'pong') && (c.text as string).length > PING_JSON_MAX) return null;
   // 'whoIsThere' may carry the host's session id, nothing else.
   if (c.kind === 'whoIsThere' && c.text !== undefined && !isSessionId(c.text)) return null;
+  // 'codeOpen' carries one code tag (codeVouchTag), nothing else.
+  if (c.kind === 'codeOpen') return isSessionId(c.text) ? { kind: 'codeOpen', text: c.text } : null;
   // 'gimbalCue' carries one allow-listed word and nothing else.
   if (c.kind === 'gimbalCue') return isGimbalCue(c.text) ? { kind: 'gimbalCue', text: c.text } : null;
   if (c.kind === 'gimbalMode') return isGimbalMode(c.text) ? { kind: 'gimbalMode', text: c.text } : null;
@@ -668,4 +675,26 @@ export function pairStateLabel(state: PairState, role: RelayRole): string {
     case 'disconnected':
       return 'Connection lost — check your network.';
   }
+}
+
+/** The tag a host publishes ('codeOpen') when it opens a short code: SHA-256
+ *  of code + room token, hex, 32 chars. Ties a freshness proof to ONE code
+ *  without putting the code itself in the room. */
+export async function codeVouchTag(code: string, roomId: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`mc-code:${code}:${roomId}`);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest.slice(0, 16), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The newest time (ms) a host vouched for the code whose tag is `tag`, over
+ *  a room's messages; null when none did. Any other host message (a resumed
+ *  session speaking) vouches for nothing. */
+export function codeVouchedAt(tag: string, docs: readonly { data: Record<string, unknown>; at: number | null }[]): number | null {
+  let best: number | null = null;
+  for (const d of docs) {
+    const cmd = d.data.cmd as { kind?: unknown; text?: unknown } | undefined;
+    if (d.data.from !== 'host' || d.data.type !== 'cmd' || cmd?.kind !== 'codeOpen' || cmd.text !== tag) continue;
+    if (typeof d.at === 'number' && (best === null || d.at > best)) best = d.at;
+  }
+  return best;
 }

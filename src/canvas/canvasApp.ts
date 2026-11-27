@@ -41,7 +41,7 @@ import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } f
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
 import { assignSide, coerceLayout, defaultLayout, sideFor, type PhonePlatform, type ScreenLayout, type Side } from './screenLayout';
-import { clearHostToken, loadHostToken, loadLayout, saveHostToken, saveLayout } from '../relay/pairingStore';
+import { clearHostToken, loadHostToken, loadLayout, openCodeStore, saveHostToken, saveLayout } from '../relay/pairingStore';
 import { buildControlSnapshot } from '../relay/controlSnapshot';
 import type { HostSession } from '../relay/session';
 import type { GimbalCueKind, GimbalModeKind } from '../relay/protocol';
@@ -4038,6 +4038,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // derived from the token.
     const res = await startPhoneJoin({
       token: loadHostToken(storage) ?? undefined,
+      openCode: openCodeStore(storage),
       onState: (st) => {
         if (st === 'paired') {
           // A hello proves little (the room replays old ones on a reload):

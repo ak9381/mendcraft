@@ -8,7 +8,7 @@
 // "can't reach the room" state instead of crashing.
 
 import { getFirebaseApp, isFirebaseConfigured } from '../firebase/app';
-import { validateMessage, type RelayMessage } from './protocol';
+import { codeVouchTag, codeVouchedAt, validateMessage, type RelayMessage } from './protocol';
 import type { RelayTransport } from './transport';
 import { createRoomFeed, type RestartClock, type RoomDoc } from './roomFeed';
 
@@ -17,7 +17,7 @@ export type FirestoreProbe =
   | { ok: false; reason: string };
 
 const PROBE_TIMEOUT_MS = 5000;
-/** How many of a room's newest messages are scanned for the host's proof that its short code is live. */
+/** At most this many 'codeOpen' proofs of one code are read (a code is opened once or twice). */
 const ALIAS_PROOF_SCAN = 12;
 
 /**
@@ -118,18 +118,20 @@ export async function probeFirestore(): Promise<FirestoreProbe> {
         await fs.deleteDoc(fs.doc(db, 'rooms', code));
       },
       // firestore.rules lets the alias doc hold only {room}, so it cannot
-      // carry a createdAt: the room's newest HOST message (server time)
-      // vouches for it instead. A host that is gone stops vouching; while it
-      // is here its own 5-minute timer (and endAdmission) clear the alias.
-      async aliasFreshAt(_code, roomId) {
-        const recent = await fs.getDocsFromServer(fs.query(
-          fs.collection(db, 'rooms', roomId, 'messages'), fs.orderBy('at', 'desc'), fs.limit(ALIAS_PROOF_SCAN),
+      // carry a createdAt: a 'codeOpen' host message naming THIS code's tag
+      // (codeVouchTag) vouches for it, at its server time. Other host
+      // messages (a resumed session speaking) vouch for no code. One
+      // equality filter (single-field index, no composite needed).
+      async aliasFreshAt(code, roomId) {
+        const tag = await codeVouchTag(code, roomId);
+        const found = await fs.getDocsFromServer(fs.query(
+          fs.collection(db, 'rooms', roomId, 'messages'), fs.where('cmd.text', '==', tag), fs.limit(ALIAS_PROOF_SCAN),
         ));
-        for (const d of recent.docs) {
-          const data = d.data() as { from?: unknown; at?: { toMillis?: () => number } | null };
-          if (data.from === 'host' && typeof data.at?.toMillis === 'function') return data.at.toMillis();
-        }
-        return null;
+        return codeVouchedAt(tag, found.docs.map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          const at = data.at as { toMillis?: () => number } | null | undefined;
+          return { data, at: typeof at?.toMillis === 'function' ? at.toMillis() : null };
+        }));
       },
     };
     return { ok: true, transport };
