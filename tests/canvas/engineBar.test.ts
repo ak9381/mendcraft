@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mountEngineBar } from '../../src/canvas/engineBar';
 import { mountModelPanels } from '../../src/canvas/modelPanels';
 
@@ -65,6 +66,14 @@ describe('engine bar', () => {
     bar.setOffline(false);
     expect(g.attrs['data-state']).toBe('idle');
     expect(g.querySelector('.mc-engine-state')!.textContent).toBe('Ready');
+  });
+
+  it('a page that OPENS offline shows Gemini Offline at once (not only on a later change)', () => {
+    const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
+    const mountAt = app.indexOf('mountEngineBar(root');
+    expect(mountAt).toBeGreaterThan(0);
+    const next = app.slice(mountAt, mountAt + 600);
+    expect(next).toMatch(/engineBar\?\.setOffline\(!net\.isOnline\(\)\)/);
   });
 
   it('offline does not hide a queued request; back online leaves Queued for the queue to clear', () => {

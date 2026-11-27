@@ -549,6 +549,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const canvasFeed = createCanvasAiFeed(phoneShell, { sim: !!opts.sim });
   const aiFeed = activityCast ? teeFeed(canvasFeed, activityCast.feed) : canvasFeed;
   const engineBar: EngineBar | null = phoneShell ? null : mountEngineBar(root, { onOpen: () => showAi(true, true), sim: !!opts.sim });
+  // A page that OPENS offline says so at once (setOnline only runs on a change).
+  engineBar?.setOffline(!net.isOnline());
   const panels = mountModelPanels(aiPanel, document, engineBar ? {
     set: (engine, state, line) => {
       // Only a failure opens the drawer by itself (the reason must be readable);
