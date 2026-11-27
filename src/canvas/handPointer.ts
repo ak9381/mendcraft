@@ -49,6 +49,9 @@ import { INDEX_TIP } from '../input/handLogic';
 import { classifyGesture, createPointFistGate, type Pt as GesturePt } from '../input/gestures';
 import {
   HAND_FEEL,
+  createFramePeriod,
+  framesToMs,
+  heldFor,
   createDeadZone,
   palmCenter,
   curlState,
@@ -600,6 +603,8 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
   let grabbing = false;
   let releasing = false;
   let fistStartT = -1;
+  /** The camera's picture interval (fist holds are times, handFeel.heldFor). */
+  const fistPeriod = createFramePeriod();
   let geoClosed = false;
   let looseSince = -1;
   let targetSince = 0;
@@ -1220,11 +1225,12 @@ function createOneHandPointer(doc: Document = document, opts: HandPointerOptions
         if (grabbing && geoClosed && t - looseSince >= HAND_FEEL.grabLooseOpenMs) geoClosed = false;
       }
       const rawFist = edge.atEdge ? grabbing && fisted : geoClosed;
+      const framePeriod = fistPeriod.tick(t);
       if (rawFist) { if (fistRun === 0) fistStartT = t; fistRun += 1; openRun = 0; openSince = -1; }
       else { openRun += 1; fistRun = 0; if (openSince < 0) openSince = t; }
       releasing = false;
       if (!fisted) {
-        if (fistRun >= HAND_FEEL.fistCloseFrames) fisted = true;
+        if (fistRun > 0 && heldFor(fistStartT, t, framesToMs(HAND_FEEL.fistCloseFrames), framePeriod)) fisted = true;
       } else if (!rawFist) {
         const open = grabbing
           ? openRun >= HAND_FEEL.releaseGraceFrames && t - openSince >= HAND_FEEL.releaseGraceMs

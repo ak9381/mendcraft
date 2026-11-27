@@ -29,6 +29,20 @@ describe('thresholdsFromMinOpen (trace units)', () => {
 });
 
 describe('createPinchBaseline', () => {
+  it('review sim-2 §6: by default it is ready after ~0.75 s of pictures at any camera rate (not 45 pictures = 1.5 s at 30 fps)', () => {
+    for (const fps of [30, 60, 120]) {
+      const b = createPinchBaseline();
+      const dt = 1000 / fps;
+      let readyAt = -1;
+      for (let i = 0; i < 400 && readyAt < 0; i++) {
+        const r = b.push(i % 6 < 3 ? 0.85 : 0.18, i * dt);
+        if (r.ready) readyAt = i * dt;
+      }
+      expect(readyAt, `${fps} fps`).toBeGreaterThanOrEqual(700);
+      expect(readyAt, `${fps} fps`).toBeLessThanOrEqual(800);
+    }
+  });
+
   it('stays on defaults until it has seen a close and an open', () => {
     const b = createPinchBaseline({ windowMs: 2000, minFrames: 10, minSpan: 0.15 });
     for (let i = 0; i < 20; i++) b.push(0.55, i * 33);

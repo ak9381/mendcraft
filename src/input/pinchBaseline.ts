@@ -46,10 +46,14 @@ export function createPinchBaseline(opts?: {
   windowMs?: number;
   minSpan?: number;
   minFrames?: number;
+  /** How long the samples must cover before the baseline is used: the old 45
+   *  frames at 60 Hz (review sim-2 §6: one sample per camera picture now). */
+  minMs?: number;
 }): PinchBaseline {
   const windowMs = opts?.windowMs ?? 4000;
   const minSpan = opts?.minSpan ?? 0.15;
-  const minFrames = opts?.minFrames ?? 45;
+  const minFrames = opts?.minFrames ?? 8;
+  const minMs = opts?.minMs ?? (opts?.minFrames !== undefined ? 0 : 44 * (1000 / 60));
   const samples: { t: number; r: number }[] = [];
   let pinchOn = DEFAULT_PINCH_ON;
   let pinchOff = DEFAULT_PINCH_OFF;
@@ -60,7 +64,7 @@ export function createPinchBaseline(opts?: {
       if (!Number.isFinite(ratio)) return { pinchOn, pinchOff, ready };
       samples.push({ t, r: ratio });
       while (samples.length && t - samples[0]!.t > windowMs) samples.shift();
-      if (samples.length < minFrames) return { pinchOn, pinchOff, ready };
+      if (samples.length < minFrames || t - samples[0]!.t < minMs) return { pinchOn, pinchOff, ready };
       const rs = samples.map((s) => s.r).sort((a, b) => a - b);
       const min = percentile(rs, 0.05);
       const open = percentile(rs, 0.90);

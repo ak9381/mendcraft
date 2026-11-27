@@ -65,14 +65,25 @@ describe('pinch machine (debounce + hysteresis + refractory)', () => {
   const CLOSED = 0.02;
   const BETWEEN = (HAND_FEEL.pinchOn + HAND_FEEL.pinchOff) / 2;
 
-  it('needs engageFrames and ~80 ms of closed hold to engage', () => {
+  it('needs ~80 ms of closed hold to engage (half a camera frame of slack)', () => {
     const m = createPinchMachine();
     expect(m.update(CLOSED, 0).pinched).toBe(false);
-    expect(m.update(CLOSED, 33).pinched).toBe(false); // 2 frames, 33 ms — too short
-    expect(m.update(CLOSED, 66).pinched).toBe(false); // 3 frames, 66 ms — still under 80 ms
-    const held = m.update(CLOSED, 99);
+    expect(m.update(CLOSED, 33).pinched).toBe(false); // 2 pictures, 33 ms — too short
+    const held = m.update(CLOSED, 66); // 3 pictures at 30 fps: the next one (100 ms) would be later than 80 ms
     expect(held.pinched).toBe(true);
     expect(held.justDown).toBe(true);
+  });
+
+  // Review sim-2 §6: one detection per camera picture must not double the
+  // engage wait. Engage latency at 30 / 60 / 120 fps stays the old feel
+  // (~80 ms, the old 60 Hz loop engaged at ~83 ms), never ~100 ms.
+  it.each([[30, 67, 70], [60, 80, 85], [120, 78, 85]])('at %i fps a held pinch engages in %i–%i ms', (fps, lo, hi) => {
+    const m = createPinchMachine();
+    const dt = 1000 / fps;
+    let at = -1;
+    for (let i = 0; i < 20 && at < 0; i++) if (m.update(CLOSED, i * dt).justDown) at = i * dt;
+    expect(at).toBeGreaterThanOrEqual(lo - 1);
+    expect(at).toBeLessThanOrEqual(hi);
   });
 
   it('a 1–2 frame dip never engages (no click from tracking noise)', () => {

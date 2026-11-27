@@ -130,6 +130,44 @@ export interface HandFeelConfig {
   releaseGraceFrames: number;
 }
 
+// ---- frame counts are times (review sim-2 §6) ----
+// The camera loop now runs once per NEW camera picture (input/frameGate.ts).
+// The *Frames thresholds above were tuned when every display frame ran a
+// detection, so they meant "this many 60 Hz frames". Counted in distinct
+// pictures they doubled the wait at 30 fps (a pinch took ~100 ms, not ~50).
+// The ENGAGE thresholds (pinch engageFrames, fistCloseFrames) are now read as
+// that much TIME — (N − 1) × 1000/60 ms of the state being held — with half a
+// camera frame of slack, since a state can only be seen when a picture
+// arrives: the engage latency is the old feel at 30, 60 and 120 Hz. The
+// release / open counts stay counts of distinct pictures: they are the
+// debounce against a bad detection, and one picture counted twice never was.
+
+/** The hold a frame-count threshold stands for: N frames at 60 Hz. */
+export const framesToMs = (frames: number): number => Math.max(0, frames - 1) * (1000 / 60);
+
+/** Has a state seen since `since` been held `ms` by `now`? Half a camera
+ *  frame (`periodMs`) of slack: the next picture would be later still. */
+export function heldFor(since: number, now: number, ms: number, periodMs: number): boolean {
+  return since >= 0 && now - since >= ms - periodMs / 2;
+}
+
+/** The camera's frame interval, measured from the pictures themselves
+ *  (smoothed, 4–50 ms; 30 fps until two pictures have been seen). */
+export interface FramePeriod { tick(now: number): number; readonly ms: number; reset(): void }
+export function createFramePeriod(initialMs = 1000 / 30): FramePeriod {
+  let ms = initialMs;
+  let last = Number.NaN;
+  return {
+    tick(now) {
+      if (Number.isFinite(last) && now > last) ms = ms * 0.7 + Math.min(50, Math.max(4, now - last)) * 0.3;
+      last = now;
+      return ms;
+    },
+    get ms() { return ms; },
+    reset() { last = Number.NaN; },
+  };
+}
+
 export const HAND_FEEL: HandFeelConfig = {
   reach: { x0: 0.2, x1: 0.8, y0: 0.3, y1: 0.85 },
   cursorFilter: { minCutoff: 1.0, beta: 0.01, dCutoff: 1.0 },
@@ -448,11 +486,16 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
   let lastClickAt = -Infinity;
   const engageMs = cfg.engageMs ?? 80;
   const gapMs = engageMs;
+  // engageFrames is a time (framesToMs, see heldFor above). releaseFrames
+  // stays a count of pictures: it is the debounce against one bad detection.
+  const engageHold = Math.max(engageMs, framesToMs(cfg.engageFrames));
+  const period = createFramePeriod();
 
   return {
     update(ratio, now, on = cfg.pinchOn, off = cfg.pinchOff) {
       let justDown = false;
       let justUp = false;
+      const p = period.tick(now);
       if (!pinched) {
         if (ratio < on) {
           if (belowSince < 0 || now - lastBelowAt > gapMs) {
@@ -465,10 +508,10 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
           below = 0;
           belowSince = -1;
         }
+        // A hold of ~engageMs (at least two pictures: one never decides).
         if (
-          below >= cfg.engageFrames
-          && belowSince >= 0
-          && now - belowSince >= engageMs
+          below >= 2
+          && heldFor(belowSince, now, engageHold, p)
           && now - lastClickAt >= cfg.refractoryMs
         ) {
           pinched = true; justDown = true; below = 0; belowSince = -1; above = 0;
@@ -482,7 +525,7 @@ export function createPinchMachine(cfg: HandFeelConfig = HAND_FEEL): PinchMachin
       return { pinched, justDown, justUp };
     },
     get pinched() { return pinched; },
-    reset() { pinched = false; below = 0; above = 0; belowSince = -1; lastBelowAt = -Infinity; lastClickAt = -Infinity; },
+    reset() { pinched = false; below = 0; above = 0; belowSince = -1; lastBelowAt = -Infinity; lastClickAt = -Infinity; period.reset(); },
   };
 }
 
