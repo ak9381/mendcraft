@@ -58,6 +58,12 @@ export function lampKey(ip: string): string {
   return `h${round(0x811c9dc5)}${round(0x9e3779b1)}`;
 }
 
+/** A bulb's MAC, kept the same way (hashed): the bulb keeps its id when the
+ *  router gives it a new address (review sim-2 §6). */
+export function macKey(mac: string): string {
+  return `m${lampKey(mac.toLowerCase().replace(/[^0-9a-z]/g, '')).slice(1)}`;
+}
+
 interface LampMemory {
   /** lampKey(ip) → id, oldest first. */
   ids: Record<string, string>;
@@ -72,7 +78,7 @@ function loadMemory(storage: IdStore): LampMemory {
     if (!raw || typeof raw !== 'object' || !raw.ids || typeof raw.ids !== 'object') return empty; // also drops an old IP-keyed map
     const ids: Record<string, string> = {};
     for (const [key, id] of Object.entries(raw.ids as Record<string, unknown>)) {
-      if (typeof id === 'string' && REAL_LAMP_ID.test(id) && /^(default|h[0-9a-f]{16})$/.test(key)) ids[key] = id;
+      if (typeof id === 'string' && REAL_LAMP_ID.test(id) && /^(default|[hm][0-9a-f]{16})$/.test(key)) ids[key] = id;
     }
     const known = new Set(Object.values(ids));
     const last = Array.isArray(raw.last) ? raw.last.filter((id): id is string => typeof id === 'string' && known.has(id)) : [];
@@ -94,9 +100,27 @@ export function rememberedLampIds(storage: IdStore = null): string[] {
  *  that same single bulb found later under its address are one bulb: the id
  *  carries over, in either direction. Bulbs not seen for a long time are
  *  forgotten once more than LAMP_MEMORY_MAX are remembered. */
-export function assignLampIds(ips: readonly string[], storage: IdStore = null): Record<string, string> {
+export function assignLampIds(ips: readonly string[], storage: IdStore = null, macs: readonly (string | undefined)[] = []): Record<string, string> {
   const m = loadMemory(storage);
-  const keys = ips.map(lampKey);
+  // A bulb that names its MAC is known by it: a new address is the same bulb.
+  // One remembered only by address (an older build) is found by that address
+  // once, then moves to its MAC — unless that id already belongs to a MAC.
+  const macOwned = new Set(Object.entries(m.ids).filter(([k]) => k.startsWith('m')).map(([, id]) => id));
+  const keys = ips.map((ip, i) => {
+    const mac = macs[i];
+    if (!mac) return lampKey(ip);
+    const key = macKey(mac);
+    const byAddress = m.ids[lampKey(ip)];
+    if (!m.ids[key] && byAddress && !macOwned.has(byAddress)) { m.ids[key] = byAddress; delete m.ids[lampKey(ip)]; }
+    return key;
+  });
+  // A bulb remembered only by an address it no longer has (an older build saw
+  // it before its MAC was known): when exactly one such bulb is missing and
+  // exactly one new MAC answers, that is the same bulb at its new address.
+  const presentAddr = new Set(ips.map(lampKey));
+  const orphans = Object.entries(m.ids).filter(([k]) => k.startsWith('h') && !presentAddr.has(k));
+  const fresh = keys.filter((k) => k.startsWith('m') && !m.ids[k]);
+  if (orphans.length === 1 && fresh.length === 1) { m.ids[fresh[0]] = orphans[0][1]; delete m.ids[orphans[0][0]]; }
   // The default-bulb entry and a lone addressed bulb are the same bulb.
   if (ips.length === 1) {
     const [key] = keys;
@@ -104,7 +128,8 @@ export function assignLampIds(ips: readonly string[], storage: IdStore = null): 
       if (key !== 'default' && m.ids.default) { m.ids[key] = m.ids.default; delete m.ids.default; }
       else if (key === 'default' && m.last.length === 1) {
         const only = Object.entries(m.ids).find(([, id]) => id === m.last[0]);
-        if (only) { delete m.ids[only[0]]; m.ids.default = only[1]; }
+        // A bulb known by its MAC keeps that entry: the default is the same id beside it.
+        if (only) { if (!only[0].startsWith('m')) delete m.ids[only[0]]; m.ids.default = only[1]; }
       }
     }
   }
@@ -141,10 +166,10 @@ export const lampLabel = (index: number): string => (index === 0 ? 'Lamp' : `Lam
  *  list = the bridge is up and no bulb answered. */
 export async function discoverRealLamps(client: WizClient, storage: IdStore = null): Promise<RealLamp[] | null> {
   if (!(await client.health())) return null;
-  let found: Array<{ ip: string; state?: { on: boolean; dimming?: number } | null }> = [];
+  let found: Array<{ ip: string; mac?: string; state?: { on: boolean; dimming?: number } | null }> = [];
   try {
     const seen = new Set<string>();
-    for (const b of await client.discover()) { if (b.ip && !seen.has(b.ip)) { seen.add(b.ip); found.push({ ip: b.ip, state: b.state }); } }
+    for (const b of await client.discover()) { if (b.ip && !seen.has(b.ip)) { seen.add(b.ip); found.push({ ip: b.ip, mac: b.mac, state: b.state }); } }
   } catch {
     found = []; // the bridge answered /health; a failed broadcast is "none found"
   }
@@ -153,7 +178,7 @@ export async function discoverRealLamps(client: WizClient, storage: IdStore = nu
     try { found = [{ ip: '', state: await client.getPilot('') }]; } catch { return []; }
   }
   found.sort((a, b) => byIp(a.ip, b.ip));
-  const ids = assignLampIds(found.map((f) => f.ip), storage);
+  const ids = assignLampIds(found.map((f) => f.ip), storage, found.map((f) => f.mac));
   const lamps: RealLamp[] = [];
   for (const [i, f] of found.entries()) {
     let pilot = f.state ?? null;
@@ -255,10 +280,13 @@ export function managedLampIdsOn(plan: SurfacePlan): Set<string> {
  *  that missed this broadcast), and each given lamp joins it. Boards are
  *  NEVER rewritten (final review I3): a tile whose bulb is not found stays as
  *  approved and shows "Not connected"; it is live again when its bulb
- *  answers. Returns the ids of the boards that show a lamp (to re-render).
- *  The speaker and every other device stay. */
+ *  answers. Returns the ids of the boards to re-render: only those showing a
+ *  lamp that came or went (a lamp that stays is updated in place through the
+ *  device store, so a 30 s re-check while a tile is missing rebuilds nothing,
+ *  review sim-2 §6). The speaker and every other device stay. */
 export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[]): string[] {
   const now = new Set(lamps.map((l) => l.id));
+  const before = new Set(Object.keys(target.store.all()).filter(isManagedLampId));
   for (const id of Object.keys(target.store.all())) {
     if (isManagedLampId(id) && !now.has(id)) { target.store.remove(id); delete target.labels[id]; target.ips.delete(id); }
   }
@@ -268,7 +296,8 @@ export function applyRealLamps(target: LampSwapTarget, lamps: readonly RealLamp[
     target.labels[lamp.id] = lamp.label;
     target.ips.set(lamp.id, lamp.ip);
   }
-  return Object.entries(target.surfaces).filter(([, plan]) => managedLampIdsOn(plan).size > 0).map(([frameId]) => frameId);
+  const moved = new Set([...before, ...now].filter((id) => before.has(id) !== now.has(id)));
+  return Object.entries(target.surfaces).filter(([, plan]) => [...managedLampIdsOn(plan)].some((id) => moved.has(id))).map(([frameId]) => frameId);
 }
 
 /** The lamps to start with when the bridge has not answered (yet, or at all):
