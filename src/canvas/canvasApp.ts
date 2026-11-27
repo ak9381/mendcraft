@@ -2186,16 +2186,25 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
 
   let flight = 0;
-  function flyTo(target: Camera): Promise<void> {
+  /** Resolves the move in flight: a move cut short by the next one still
+   *  resolves (an `await focus()` never hangs), where the camera was. */
+  let landFlight: (() => void) | null = null;
+  /** Stop the move in flight (a wheel, a pinch, the next move): it resolves. */
+  function cutFlight(): void {
     cancelAnimationFrame(flight);
+    const cut = landFlight; landFlight = null; cut?.();
+  }
+  function flyTo(target: Camera): Promise<void> {
+    cutFlight();
     const from = camera; const v = vp();
     if (reduced) { camera = target; applyCamera(); persist(); return Promise.resolve(); }
     return new Promise((done) => {
+      landFlight = done;
       const t0 = performance.now(); const ms = 420;
       const step = (now: number) => {
         const t = Math.min(1, (now - t0) / ms);
         camera = lerpCamera(from, target, t, v); applyCamera();
-        if (t < 1) flight = requestAnimationFrame(step); else { persist(); done(); }
+        if (t < 1) flight = requestAnimationFrame(step); else { persist(); if (landFlight === done) landFlight = null; done(); }
       };
       flight = requestAnimationFrame(step);
     });
@@ -6028,14 +6037,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (intent.kind === 'pan') {
       if (canScrollInside(target, intent.dx, intent.dy)) return;
       e.preventDefault();
-      cancelAnimationFrame(flight); zoomGoal = null;
+      cutFlight(); zoomGoal = null;
       camera = clampRoomPan(panBy(camera, -intent.dx, -intent.dy));
       applyCamera();
       clearTimeout(wheelPersistTimer); wheelPersistTimer = window.setTimeout(persist, 200);
       return;
     }
     e.preventDefault();
-    cancelAnimationFrame(flight); zoomGoal = null;
+    cutFlight(); zoomGoal = null;
     dropFocusForZoom();
     const r = viewport.getBoundingClientRect();
     camera = zoomAbout(camera, { x: e.clientX - r.left, y: e.clientY - r.top }, intent.factor);
@@ -6046,7 +6055,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   type GestureEv = Event & { scale: number; clientX: number; clientY: number };
   viewport.addEventListener('gesturestart', (e) => {
     if (phoneLocked()) return;
-    e.preventDefault(); cancelAnimationFrame(flight); dropFocusForZoom(); gestureZ0 = camera.z;
+    e.preventDefault(); cutFlight(); dropFocusForZoom(); gestureZ0 = camera.z;
   });
   viewport.addEventListener('gesturechange', (e) => {
     if (phoneLocked()) return;
