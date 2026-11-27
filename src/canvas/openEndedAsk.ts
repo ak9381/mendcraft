@@ -42,6 +42,8 @@ const ACTING = 'adding|making|creating|building|drawing|putting|placing|insertin
 const OBJ = 'it|that|them|boards?|plans?|floor\\s*plans?|rooms?|lamps?|lights?|bulbs?|tiles?|stud(?:y|ies)|bed\\s*rooms?|kitchens?|bath\\s*rooms?|living\\s*rooms?|walls?|doors?|windows?|stairs?|staircase|dashboards?|devices?|speakers?|music|songs?|tvs?|fans?|thermostats?|plugs?|scenes?|layouts?|buttons?|garage|office|hall(?:way)?|lounge|closet';
 const APP_THING = new RegExp(String.raw`\b(?:${OBJ.replace(/^it\|that\|them\|/, '')})\b`, 'i');
 const DET = 'a|an|the|your|my|new|one|this|these|those|some|another|second|extra|that';
+/** Up to two adverbs between "I've" / "I" and the verb: "I've also paused it", "I've now switched everything off". */
+const ADV = String.raw`(?:(?:just|now|already|also|since|indeed|finally|really|even|then|actually|quickly|gently|successfully|[a-z]+ly)\s+){0,2}`;
 const OBJ_PHRASE = String.raw`(?:\s+(?:on|off|up|down|in|out|back|over))?(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${OBJ})\b`;
 const OBJ_ONLY = String.raw`(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${OBJ})\b`;
 const FUTURE = String.raw`\b(?:I\s*(?:['’]ll|\s+will|\s+shall|['’]m\s+going\s+to|\s+am\s+going\s+to|['’]m\s+gonna|['’]d\s+(?:be\s+(?:glad|happy|delighted)\s+to|love\s+to)|\s+would\s+(?:be\s+(?:glad|happy|delighted)\s+to|love\s+to)|\s+can)|let\s+me|allow\s+me\s+to)\s+(?:go\s+ahead\s+and\s+|now\s+|just\s+|quickly\s+)?`;
@@ -49,7 +51,7 @@ const PROMISES: RegExp[] = [
   new RegExp(String.raw`${FUTURE}(?!put\s+it\s+(?:this|that|another)\s+way)(?:${ACT})${OBJ_PHRASE}`, 'i'), // "Let me put it this way" is talk
   new RegExp(String.raw`${FUTURE}(?:do|handle|take\s+care\s+of|sort\s+out)\s+(?:that|it|this)\b`, 'i'),
   new RegExp(String.raw`\bI\s*(?:['’]ll|\s+will)\s+get\s+(?:it|that|this|them)\s+(?:sorted|done|fixed|added|set\s+up|ready|going|moving|changed)\b`, 'i'),
-  new RegExp(String.raw`\bI\s*(?:['’]ve|\s+have)\s+(?:just\s+|now\s+|already\s+)?(?:${ACTED})${OBJ_PHRASE}`, 'i'),
+  new RegExp(String.raw`\b(?:I|we)\s*(?:['’]ve|\s+have)\s+${ADV}(?:${ACTED})(?:${OBJ_PHRASE}|\s+everything\b)`, 'i'),
   /\bI\s*(?:['’]ve|\s+have)\s+got\s+(?:it|that|this|you\s+covered)\b/i,
   new RegExp(String.raw`\bI\s*(?:['’]m|\s+am)\s+(?:now\s+|just\s+)?(?:${ACTING})${OBJ_PHRASE}`, 'i'),
   /\bI\s*(?:['’]m|\s+am)\s+on\s+it\b/i,
@@ -138,7 +140,7 @@ function strongGerund(ing: string): boolean {
 }
 const OUTSIDE_PAST = 'sent|called|rang|rung|phoned|dialled|dialed|texted|messaged|emailed|mailed|forwarded|ordered|booked|bought|purchased|paid|reserved|scheduled|reminded|alerted|notified|contacted|invited|arranged|cancell?ed|transferred|posted|delivered|informed|pinged';
 const PAST_CLAIMS: RegExp[] = [
-  new RegExp(String.raw`\bI\s*(?:'ve|\s+have|'d|\s+had)?\s+(?:just\s+|now\s+|already\s+)?(?:${OUTSIDE_PAST})\b`, 'i'),
+  new RegExp(String.raw`\bI\s*(?:'ve|\s+have|'d|\s+had)?\s+${ADV}(?:${OUTSIDE_PAST})\b`, 'i'),
   /\bI\s*(?:'ve|\s+have)\s+(?:just\s+|already\s+)?(?:told|let)\s+(?!you\b|me\b)\w+(?:\s+\w+)?(?:\s+know)?\b/i,
   new RegExp(String.raw`\b(?:has|have|was|were)\s+(?:just\s+|now\s+|already\s+)?been\s+(?:${OUTSIDE_PAST}|told|set|added|turned|switched)\b`, 'i'),
   // "Got it, the fan is off." — chat switched nothing.
@@ -159,7 +161,7 @@ const STATE_ONOFF = 'on|off|playing|paused|muted|unmuted|locked|unlocked|connect
 const STATE_END = String.raw`(?:\s+(?:now|already|for\s+you|again))*\s*(?:[.!,;—–]|$)`;
 const STATE_CLAIMS: RegExp[] = [
   // "I turned the lamp on", "I just dimmed the lights" — not "I set out…", "I changed my mind", "I turned 80".
-  new RegExp(String.raw`\bI\s+(?:just\s+|now\s+|already\s+|also\s+|quickly\s+)?(?:${APP_PAST})\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing)\b)`, 'i'),
+  new RegExp(String.raw`\bI\s+${ADV}(?:${APP_PAST})\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing)\b)`, 'i'),
   // "Turned the lamp on." / "Sure! Turning the lamp on." / "Switched off the fan for you."
   new RegExp(String.raw`(?:^|[.!?,;:—–-]\s*)(?:${APP_PAST}|${APP_GERUND})(?:\s+(?:on|off|up|down|in|out|back|over))?(?:\s+(?:${DET}))*(?:\s+[\w’'-]+)?\s+(?:${THING})\b`, 'i'),
   // "The lamp is on (now)", "Your lights are off now", "The lamp's on now", "Lamp is on."
@@ -180,7 +182,7 @@ const STATE_CLAIMS: RegExp[] = [
   // "I made the lamp brighter.", "I've got the lamp on for you."
   new RegExp(String.raw`\bI\s*(?:'ve|\s+have)?\s+(?:just\s+|now\s+|already\s+)?(?:made|got|gotten|had)\s+(?:the|your|my)\s+(?:[\w'-]+\s+){0,2}?(?:${THING})\s+(?:${STATE})\b`, 'i'),
   // "I did turn on the lamp." — not "I did think so".
-  new RegExp(String.raw`\bI\s+did\s+(?:just\s+)?(?:turn|switch|set|dim|brighten|play|add|start|stop|connect|open|close|move|remove|change|put|make|build|draw)${OBJ_PHRASE}`, 'i'),
+  new RegExp(String.raw`\bI\s+${ADV}did\s+${ADV}(?:turn|switch|set|dim|brighten|play|add|start|stop|connect|open|close|move|remove|change|put|make|build|draw)${OBJ_PHRASE}`, 'i'),
   // "Your lamp should be on now."
   new RegExp(String.raw`\b(?:${THING}|it)\s+(?:should|must)\s+(?:now\s+)?be\s+(?:now\s+)?(?:${STATE})${STATE_END}`, 'i'),
   // "There's now a study next to bedroom 2." — not "There's now a chance of rain".
@@ -226,9 +228,9 @@ const ASSERT_RULES: RegExp[] = [
   new RegExp(String.raw`^(?:just|successfully)\s+(?:${PAST1})\b`, 'i'),
   /\bsuccessful(?:ly)?\b/i,
   // "We turned the lamp off.", "Mendcraft has turned it on."
-  new RegExp(String.raw`\b(?:we|mendcraft)\s*(?:'ve|\s+have|\s+has|\s+just)?\s+(?:${PAST1})\b(?!\s+(?:out|to\s+(?:be|go|see)|our\s+minds?|it\s+(?:through|work|happen|home))\b)`, 'i'),
+  new RegExp(String.raw`\b(?:we|mendcraft)\s*(?:'ve|\s+have|\s+has)?\s+${ADV}(?:${PAST1})\b(?!\s+(?:out|to\s+(?:be|go|see)|our\s+minds?|it\s+(?:through|work|happen|home))\b)`, 'i'),
   // Done-words said as the whole sentence.
-  /^(?:you\s+got\s+it|will\s+do|sure\s+thing|(?:you'?re\s+|we'?re\s+|there,?\s+)?all\s+set|(?:that'?s\s+|it'?s\s+|all\s+)?taken\s+care\s+of|(?:it|that)\s*(?:'s|\s+is)\s+(?:all\s+)?(?:done|set|handled|sorted)|all\s+done(?:\s+here)?|done\s+and\s+done|consider\s+it\s+(?:handled|sorted)|saved|sent|updated|added)\s*[.!]*$/i,
+  /^(?:you\s+got\s+it|will\s+do|sure\s+thing|(?:you'?re\s+|we'?re\s+|there,?\s+)?all\s+set|(?:that'?s\s+|it'?s\s+|all\s+)?taken\s+care\s+of|(?:it|that)\s*(?:'s|\s+is)\s+(?:all\s+)?(?:done|set|handled|sorted)|all\s+done(?:\s+here)?|done\s+and\s+done|finished|sorted|success|it\s+worked|mission\s+accomplished|consider\s+it\s+(?:handled|sorted)|saved|sent|updated|added)\s*[.!]*$/i,
   // "Blue it is.", "Warm white it is!"
   /^(?!(?:that|this|so|there|here|what|how|true|such|yes|indeed)\b)(?:[\w'-]+\s+){1,2}it\s+is\s*[.!]*$/i,
 ];
@@ -251,11 +253,21 @@ const EXEMPT_CLAUSE = new RegExp([
   String.raw`^you\b(?!\s*(?:got\s+it|'?re\s+(?:all\s+)?(?:set|good\s+to\s+go)|are\s+(?:all\s+)?set))`,
   String.raw`^(?:i'?m|i\s+am|so|really)?\s*(?:glad|happy|delighted|pleased)\b|^(?:i\s+)?(?:hope|hopefully|wish)\b|^let\s+me\s+know\b`,
   String.raw`^my\s+favou?rite\b`,
+  // Who she is (final review 5): "I'm Gemini Nano", "I run on device", "I can help you build boards".
+  String.raw`^(?:i'?m|i\s+am|my\s+name\s+is|this\s+is)\s+(?:gemini|nano|mendcraft|google|an?\s+(?:[\w'-]+\s+){0,3}(?:model|assistant|helper|ai)|the\s+(?:[\w'-]+\s+){0,2}(?:assistant|helper|model))\b|^i\s+(?:run|work|live)\b|^i\s+can\s+help\s+(?:you\s+)?(?:with|build|make|create|draw|sketch|plan|design|write)\b`,
+  // "I wouldn't know whether…", "I couldn't say".
+  String.raw`^i\s+(?:wouldn'?t|couldn'?t|would\s+not|could\s+not)\s+(?:know|tell|say)\b`,
+  // Her instruction: "Remember to turn the lamp off", "Don't forget…", "Make sure…", "For a new board, say …".
+  String.raw`^(?:remember|don'?t\s+forget|do\s+not\s+forget|make\s+sure|be\s+sure|never)\b|^for\s+(?:a|an)\s`,
+  // A definition: "Brightness is how much light…", "\"Paused\" means…", "Standby is when…".
+  String.raw`^(?:"…"|[\w'-]+)\s+(?:means|refers\s+to|is\s+(?:when|how|what|where|the\s+(?:amount|measure|level|word|name)))\b`,
+  // Lamps in general, not hers: "Most smart lamps can be dimmed", "Stage lights are dimmed before a play starts".
+  String.raw`^(?:(?:most|many|some|all|old|smart|stage|street|traffic|fairy|festival|led|christmas|oil)\s+)*(?:lamps|lights|bulbs|speakers|candles)\b(?=[^]*\b(?:during|all\s+over|before|after|at\s+(?:night|dusk|dawn|bedtime)|every|usually|often|always|sometimes|can|could|may|might|waste|use|save|cost)\b)|^(?:most|many)\s`,
   // A generic statement ("A lamp that is on all day uses more power") — not
   // one that says something changed ("A new tile is on…", "A room was added").
   String.raw`^(?:a|an)\s+(?![^,;]*\b(?:new|now|was|were|has\s+been|have\s+been|added|created|moved|removed|turned|switched)\b)`,
   // Advice: "around 70% brightness is comfortable".
-  String.raw`\b(?:around|about|roughly|between|up\s+to)\s+\d+`,
+  String.raw`^(?!(?:i|we)\b)[^]*\b(?:around|about|roughly|between|up\s+to)\s+\d+`,
   String.raw`\bin\s+my\s+(?:imagination|head|mind|dreams?)\b`,
   String.raw`^(?!(?:every|no|some|any)thing\b|morning|evening|ceiling)[a-z]+ing\b(?:\s+[\w'-]+){0,5}\s+(?:helps?|is|are|can|could|takes?|makes?|sets?|feels?|works?|keeps?|saves?|gives?|brings?|creates?|matters?)\b`,
 ].join('|'), 'i');
@@ -309,7 +321,7 @@ const CLAUSE_CLAIMS: RegExp[] = [
   // "Both of them are off now.", "It's switched off."
   new RegExp(String.raw`\b(?:it|they|them|both|everything|all\s+of\s+them|both\s+of\s+them)\s*(?:is|are|'s|'re|seems?\s+to\s+be|appears?\s+to\s+be|looks?(?:\s+to\s+be)?)\s+(?:\w+\s+)?(?:on|off|out|playing|paused|muted|dimmed|switched\s+(?:on|off)|turned\s+(?:on|off))\b${NON_LOCATIVE}`, 'i'),
   // "I took care of the lights.", "I've gone ahead and dimmed the lights.", "I went ahead and…"
-  new RegExp(String.raw`\b(?:i|we)\s*(?:'ve|\s+have|'d|\s+had)?\s+(?:just\s+|already\s+)?(?:gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:${ACTION_PAST}|${APP_PAST}|took\s+care|handled|sorted|took)\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing|the\s+page|a\s+corner|the\s+tables|over\s+a\s+new\s+leaf)\b)`, 'i'),
+  new RegExp(String.raw`\b(?:i|we)\s*(?:'ve|\s+have|'d|\s+had)?\s+${ADV}(?:gone\s+ahead\s+and\s+|went\s+ahead\s+and\s+)?(?:${ACTION_PAST}|${APP_PAST}|took\s+care|handled|sorted|took)\b(?!\s+(?:out|to|my\s+mind|\d+|[a-z]+ing|the\s+page|a\s+corner|the\s+tables|over\s+a\s+new\s+leaf)\b)`, 'i'),
 ];
 /** True when an asserted clause claims a state or an action on an app thing. */
 function thingStateClaim(clause: string): boolean {
@@ -366,10 +378,20 @@ function claimsAnyAction(raw: string, complete: boolean): boolean {
     || sentencesOf(asserted).some(assertsState)
     || clausesOf(asserted).some(thingStateClaim))) return true;
   if (/(?:^|[.!?,;—]\s*)on\s+it\s*(?:[.!]|$)/i.test(t)) return true;
+  // Kannada in Latin letters (final review 5): "deepa on aagide", "volume kammi maadide".
+  if (/\b(?:on|off|pause|play|start|stop|jaasti|jasti|kammi|kadime|full|mute|band)\s+(?:aagide|agide|aagtide|aagtaide|aaythu|aaytu|aayitu|aytu|maadide|madide|maadiddini|madiddini|maadiddene|maadidini|maadidene|maadiddeeni|maadde|madde)\b/i.test(t)) return true;
   return false;
 }
 /** Sentences that only teach her what to say are not judged. */
-const judged = (t: string): string => t.split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' ');
+const judged = (t: string): string => whereItRuns(t).split(/(?<=[.!?])\s+/).filter((s) => !HOW_TO_ASK.test(s)).join(' ');
+/** Final review 5: "on your device", "on-device", "in the cloud", "in your
+ *  browser" say where the model runs, not what state a device is in. */
+function whereItRuns(t: string): string {
+  return t
+    .replace(/\b(?:right\s+)?(?:here\s+)?(?:on|in|inside)\s+(?:your|this|the|my|a)\s+(?:own\s+)?(?:device|phone|laptop|computer|browser|tablet|machine|chrome)\b/gi, 'here')
+    .replace(/\bon[-\s]device\b/gi, 'local')
+    .replace(/\b(?:in|to|from)\s+the\s+cloud\b/gi, 'remotely');
+}
 
 // ── Non-English replies (final review C1b) ─────────────────────────────────
 // The guard above can only read English. Chat is told to answer in English,
@@ -431,7 +453,7 @@ export function promiseGuard(reply: string, asked = ''): { reply: string; replac
 }
 
 /** A clause that could still turn into a promise once its sentence ends. */
-const RISKY = new RegExp(String.raw`^\s*(?:no|nope|nah|well|hmm|oh|actually|so|great|perfect|alright|good|done|there)\b[\s,!.—–-]*$|\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST})\b`, 'i');
+const RISKY = new RegExp(String.raw`^\s*(?:no|nope|nah|well|hmm|oh|actually|so|great|perfect|alright|good|done|there|you(?:['’]re|\s+are)\s+all\s+set|all\s+(?:set|done)|sorted|finished|success|it\s+worked|mission\s+accomplished|as\s+(?:requested|you\s+asked)|here\s+you\s+(?:go|are)|voil[aà]|consider\s+it\s+done|and\s+done)\b[\s,!.—–-]*$|\bI\s*(?:['’]ll|['’]d|['’]m|will|shall|would|can|could|am)\b|\blet\s+me\b|\ballow\s+me\b|\b(?:right|straight)\s+away\b|\bon\s+it\b|^\s*[A-Za-z]+ing\b|^\s*(?:yes|yeah|yep|yup|sure|of\s+course|absolutely|certainly|okay|ok|no\s+problem|definitely|right)\b|\b(?:I|let\s+me|allow\s+me)\b[^.!?]*\b(?:${ACT}|${ACTED}|${ACTING}|do|handle|got|on)\b|^\s*(?:${ACTING})\b|\b(?:is|are)\s+now\b|\b(?:has|have)\s+been\b|\b(?:one|a|just\s+a)\s+(?:moment|second|sec)\b|\bhang\s+on\b|\bbear\s+with\s+me\b|\b(?:is|are|['’]s|['’]re)\s+(?:now\s+)?(?:${STATE})\b|^\s*(?:${APP_PAST}|${APP_GERUND})\b|\bI\s+(?:${APP_PAST})\b`, 'i');
 /** While a reply streams: the part that may already be shown and spoken —
  *  whole clauses only, and a clause that might become a promise ("I'll add,")
  *  is held until its sentence has ended and passed the guard. null = the
