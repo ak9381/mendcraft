@@ -24,6 +24,13 @@ describe('orders that still act', () => {
     });
 });
 
+describe('try to break it', () => {
+  it('"set the desk lamp to 500% brightness" is a device line (refused) even when no lamp is called desk', () => {
+    const two: DeviceRef[] = [{ id: 'a', label: 'Main light', kind: 'lamp' }, { id: 'b', label: 'Reading lamp', kind: 'lamp' }, devices[1]];
+    expect(routeLine('set the desk lamp to 500% brightness', { devices: two, sim: true }).name).toBe('device');
+  });
+});
+
 describe('Kannada polite and plain imperatives are the same order', () => {
   const pack = (() => {
     const r = coerceLanguagePack({ lang: 'kn', strings: { ...SCRIPTED_KN_PACK.strings }, phrases: SCRIPTED_KN_PACK.phrases });

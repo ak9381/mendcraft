@@ -47,11 +47,11 @@ function levelAttempt(clause: string, devices: readonly DeviceRef[]): Attempt | 
   }
   // The ordinary parser only names the targets; its own clamped number is never used.
   // A lamp she names by another word ("the desk lamp" when it is labelled
-  // Reading lamp) is not an order the parser takes, but with one lamp it is
-  // still that lamp's limit being tried: refused all the same.
+  // Reading lamp) is not an order the parser takes, but a lamp's limit is
+  // still being tried: refused all the same (nothing is ever applied here).
   const lamps = devices.filter((d) => d.kind !== 'music');
   const hit = parseDeviceCommands(text, devices)?.intents.find((i) => i.brightness !== undefined)
-    ?? (lamps.length === 1 && /\b(?:lamps?|lights?|brightness)\b/.test(low) ? { deviceId: lamps[0].id } : undefined);
+    ?? (lamps.length && /\b(?:lamps?|lights?|brightness)\b/.test(low) ? { deviceId: lamps[0].id } : undefined);
   if (!hit) return null;
   return { kind: 'brightness', deviceId: hit.deviceId, label: devices.find((x) => x.id === hit.deviceId)?.label ?? hit.deviceId, level };
 }
