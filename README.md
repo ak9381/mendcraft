@@ -1,175 +1,249 @@
 # Mendcraft
 
-**A smart canvas that Gemini Nano and Gemini turn into anything.** Open an
-infinite canvas, say what you want, and Mendcraft builds it as live
-[A2UI](https://github.com/google/A2UI) boards: a device dashboard for the room
-you are in, a CAD floor plan, a translated layout. Every change shows the prompt
-going in, which engine worked on it, and waits for a human to keep or drop it.
-Built for Google **#BuildHybridAI**.
+**A canvas for running your room with your voice and your hands, in your own
+language, with the private parts kept on your laptop.**
+
+Mendcraft is for people for whom small buttons and touch screens are hard. We
+built it first for the developer's mother, who has arthritis and speaks Kannada. You open
+one canvas in Chrome and say what you need: "build the dashboard", "draw the
+floor plan", "add Kannada". Gemini Nano works on the laptop through Firebase AI
+Logic, and Gemini in the cloud does the heavier work. Every board, lamp
+connector, floor plan and language pack comes back as a proposal you review.
+Nothing changes until you press Approve, and a counter shows every byte sent to
+Gemini.
+
+**Live demo:** https://mendcraft.web.app (desktop Chrome; see
+[docs/submission/TESTING.md](docs/submission/TESTING.md)). Built for Google
+**#BuildHybridAI**.
 
 ---
 
-## The demo flow (one canvas, five steps)
+## How it works on `main`
 
-1. **Open a new canvas** — `/canvas.html?fresh=1`.
-2. **Connect the room** — Mendcraft finds the lamp (real WiZ bulb through the
-   local bridge, or a labelled `SIM` lamp) and builds an interactive device
-   dashboard board.
-3. **Say "save"** — the dashboard is pinned to the side of the canvas.
-4. **Build the CAD plan** — a floor-plan board appears next to the pinned
-   dashboard; DXF export works.
-5. **Say "add Kannada"** — Gemini plans the change, Nano carries it out on
-   device, and a **Proposal card** (Keep / Drop) waits for human approval.
+The code is scaffolding only: the canvas, a review card, fixed checkers and the
+device transports. The content is made by the models:
 
-The camera gimbal (iPhone app) follows you while a board is being built; on the
-web it soft-fails with a clear note.
+| What she asks for | Who makes it | What the code does with it |
+| --- | --- | --- |
+| "build the dashboard" (a board for the room) | Nano drafts on the laptop, then Gemini improves the draft | Checked against the board schema, shown in review |
+| "show my devices" | Gemini lays out the board (Nano offline) | The table rows come from what each device reports, never from the reply |
+| "draw the floor plan" | Gemini writes the plan as a document | Code draws it as checked geometry; accessibility check, 3D and DXF export run locally |
+| "add a study next to bedroom 2" | Nano decides the edit on the laptop (Gemini only if Nano can't and you are online) | Code applies it to a copy; you review the change |
+| "connect the lamp" | Gemini writes the lamp's protocol as data | Fixed rules check every port and action; a fixed interpreter runs it |
+| "add Kannada" | Gemini writes the language pack | Only known keys, the language's own script, no markup |
 
-## Hybrid AI: Nano drafts, Gemini upgrades
-
-- **Firebase AI Logic** (`firebase/ai`) with Gemini Nano in Chrome for fast,
-  private drafts and cloud Gemini (with a lite-model hedge) for bigger plans.
-  Nano-only jobs use `ONLY_ON_DEVICE`; anything that may reach the cloud is
-  redacted first.
-- **The model never emits raw UI.** Every plan passes the surface-plan validator
-  (whitelisted tile types, safe ids) before A2UI renders it with Lit, and lands
-  in the Proposal keep/drop buffer first.
-- **Byte ledger** — every cloud round trip is logged with its byte size, so the
-  canvas shows exactly what left the machine.
-- **App Check** (reCAPTCHA Enterprise) runs before any AI call.
-
-## Privacy router: phones go through the desktop hub
-
-Phones and connected apps send requests to the desktop Chrome hub over the room
-link. The hub strips personal data first (rules, people-directory names →
-`[Client A]`, optional Nano), sends only the cleaned prompt to Gemini, and puts
-the names back locally. Every change carries its route:
-
-| Label | Meaning |
-|---|---|
-| `routed via Mac: Nano cleaned, then Gemini` | Phone → desktop hub cleaned it → Gemini |
-| `on this device` | Nano handled it locally |
-| `Gemini (no Nano on this phone)` | Phones without on-device Nano (all iPhones, and Android phones outside the AICore list, e.g. Nothing Phone 3a) |
-
-With no hub and no Nano, Mendcraft asks before sending anything uncleaned.
-
-## Hands, gestures and "teach a gesture"
-
-- MediaPipe hand and face landmarks stay on the device. The overlay is smoothed
-  (one-euro filter), fades in and out, and respects reduced motion.
-- **No always-on dot.** Like visionOS and Ultraleap's content-first guidance,
-  the targeted element gets a hover highlight with a soft snap; a short ring
-  shows only while you pinch. Debug landmarks: `?debugHands=1`.
-- **Teach a gesture** — record 2–3 samples, say what it should do ("save the
-  canvas"), approve it on a Proposal card. Poses match by nearest template,
-  motions by DTW, with a confidence threshold and a warning on conflicts with
-  built-in gestures. Custom gestures are stored on this device only. Demo:
-  thumbs up = save.
-
-## Phone and tablet companion (iOS and Android)
-
-`/mobile.html` is the Capacitor companion: pairing (QR or 8-character code),
-a one-handed canvas view with a board strip, the pinned dashboard, Proposal
-cards as bottom sheets with Keep/Drop in the thumb zone, privacy-route chips,
-and the gimbal camera. iOS follows the HIG, Android follows Material 3, and
-tablets get a split view. Deep links: `?mobileScreen=pair|canvas|dashboard|approval|gimbal|tablet&sim=1`.
-
-## Feature flags
-
-Older modules (the old landing page, studio, phone remote, `/control`, legacy
-judges page) are kept but off by default; every route lands on the canvas. Turn
-one on with `?flags=landing,studio,remote,control,judgesLegacy` or `localStorage['mc.flags']`.
+Each approved result is an **artifact**: data stored on the device, apart from
+the code, in IndexedDB
+([src/artifacts/store.ts](src/artifacts/store.ts)). Every artifact is checked
+when it is written and **checked again every time it loads**, because storage
+can be edited; nothing in an artifact is ever run
+([src/artifacts/artifact.ts](src/artifacts/artifact.ts)). Say "show artifacts"
+to list them with who made each one ("Gemini · cloud", "Gemini Nano · on
+device", "You"), and to remove, export or import them.
 
 ---
 
-## Run locally
+## How we use Firebase AI Logic
 
-```bash
-npm install                      # npm ci can fail on some boxes; use install
-cp .env.example .env.local       # fill in your Firebase web config (never commit it)
-npm run dev                      # http://localhost:5173/canvas.html?fresh=1&sim=1
-npm run wiz-bridge               # optional: real WiZ lamp on the LAN (prints a token; open the canvas with ?wizToken=…)
-```
+All model calls on the canvas go through the Firebase AI Logic web SDK
+(`firebase/ai`). The one exception is the iPhone app's Apple model path, which
+is described under [Honest limits](#honest-limits).
 
-- **Without Firebase config** the app still runs: commands go through the local
-  rule parser (badge `RULES`), and `/canvas.html?sim=1` needs nothing at all.
-- **On-device Gemini Nano:** Chrome desktop 139+, enable
-  `chrome://flags/#prompt-api-for-gemini-nano-multimodal-input`, then click
-  **Enable on-device AI** (the model must init on a user gesture).
-- **Debug App Check:** set `VITE_APPCHECK_DEBUG=true`, copy the printed debug
-  token from DevTools, register it in Firebase console → App Check. Never commit it.
-- **Human console steps** (for a full cloud/replay-protected run) are listed in
-  `docs/CONSOLE-STEPS.md`.
+**Setup**
+
+- `getAI(app, { backend: new GoogleAIBackend(), useLimitedUseAppCheckTokens: true })`.
+  Each request carries a fresh limited-use App Check token
+  ([src/ai/hybrid.ts#L1297](src/ai/hybrid.ts#L1297)).
+- App Check with reCAPTCHA Enterprise starts before any model is built. If it
+  fails, no model is used
+  ([src/firebase/appCheck.ts#L121-L125](src/firebase/appCheck.ts#L121-L125),
+  [src/ai/hybrid.ts#L1272-L1279](src/ai/hybrid.ts#L1272-L1279)).
+- Remote Config supplies the cloud model name (default `gemini-3.5-flash-lite`)
+  before the models are built. If the primary has no valid answer after 2 s, a
+  backup call to `gemini-3.1-flash-lite` starts and the first valid answer wins ([src/firebase/remoteConfig.ts](src/firebase/remoteConfig.ts),
+  [src/ai/hedge.ts](src/ai/hedge.ts)).
+
+**Inference mode per feature (the models the canvas calls)**
+
+| Model | Mode | Used for | Why this mode |
+| --- | --- | --- | --- |
+| Per-turn on-device model ([hybrid.ts#L1312-L1315](src/ai/hybrid.ts#L1312-L1315), called by `streamOnDevice` [#L746](src/ai/hybrid.ts#L746), wired in [canvasMain.ts#L134-L146](src/canvas/canvasMain.ts#L134-L146)) | `ONLY_ON_DEVICE` | Board drafts, plan edits, chat replies, the devices board offline | Her raw words go to Nano unredacted. `ONLY_ON_DEVICE` has no silent cloud path. If Nano fails, the canvas hands off to Gemini with the redacted prompt and says so on screen. |
+| Canvas cloud model ([hybrid.ts#L1560-L1563](src/ai/hybrid.ts#L1560-L1563)) and its backup ([#L1564-L1569](src/ai/hybrid.ts#L1564-L1569)), called by `runCanvasCloud` ([#L591](src/ai/hybrid.ts#L591)) | `ONLY_IN_CLOUD` | Improving the board draft, floor plans, connectors, language packs, handoffs | Bigger jobs that Nano does not do well (Nano is set up for English text). The prompt is redacted first and its bytes are counted on the real request ([hybrid.ts#L601-L606](src/ai/hybrid.ts#L601-L606)). |
+| Device identify ([hybrid.ts#L1494-L1498](src/ai/hybrid.ts#L1494-L1498)) with a cloud twin ([#L1499-L1502](src/ai/hybrid.ts#L1499-L1502)), called by `identifyDevice` ([#L2597](src/ai/hybrid.ts#L2597)) | `PREFER_ON_DEVICE` | Point at a device: a cropped camera frame is named | Nano first with image input, Gemini if Nano is not ready. This is the one canvas feature where a photo crop can leave the laptop, and the canvas counts it ([hybrid.ts#L2562-L2591](src/ai/hybrid.ts#L2562-L2591)). |
+
+How the canvas picks an engine for each step, and labels the step honestly when
+Nano is not there, is in [src/canvas/engines.ts](src/canvas/engines.ts).
+
+The same `initFirebase` function
+([hybrid.ts#L1267](src/ai/hybrid.ts#L1267)) also builds older models: intent,
+verify, fusion, template, copilot, hand profile, condense, TTS and others (for
+example `intent` at [#L1327](src/ai/hybrid.ts#L1327) and `handAdapt` at
+[#L1437](src/ai/hybrid.ts#L1437)). They belong to the **legacy studio**
+(`?flags=studio`), and the canvas does not call them.
 
 ---
 
-## Tests and screenshots
+## Privacy
+
+- **Redaction before the cloud.** Device IDs become "Device N" placeholders and
+  addresses are never sent. Device **names** are sent, and the review card says
+  so ("sent your words and device names…"). People's names (next to words like
+  "mom" or in "Meera's room"), phone numbers and emails are swapped for tokens
+  by fixed rules, not a model
+  ([src/canvas/aiTurn.ts#L121-L164](src/canvas/aiTurn.ts#L121-L164),
+  [src/ai/redact.ts](src/ai/redact.ts)).
+- **Bytes ledger.** The engine bar shows "N B sent to cloud": every byte sent to
+  Gemini, counted on the real request. Each review card shows its own receipt,
+  for example "Drafted by Nano on this device · 0 B; improved by Gemini · 2.1 KB"
+  ([src/canvas/engineBar.ts](src/canvas/engineBar.ts),
+  [src/canvas/reviewDialog.ts#L124-L132](src/canvas/reviewDialog.ts#L124-L132)).
+  It does not count Chrome's speech recognition, Spotify, the phone link or
+  model downloads.
+- **Hand and face tracking on the device.** MediaPipe landmarks are computed in
+  the browser and never uploaded. The wasm and model files are downloaded from
+  a CDN ([src/input/hands.ts](src/input/hands.ts),
+  [src/input/presence.ts](src/input/presence.ts)). Register keeps a face
+  signature and hand proportions in sessionStorage only
+  ([src/canvas/scanRegistration.ts](src/canvas/scanRegistration.ts)).
+- **Offline.** Approved boards, plans and packs load from the device. Offline,
+  Nano still drafts, the Gemini card says "Offline", and anything that needs
+  Gemini says so and changes nothing.
+
+## Accessibility
+
+- **Hands instead of small buttons.** "Palm to point · fist to click · hold a
+  fist to move." A fist is easier than a fingertip pinch.
+- **Hover to click** (More → Hands): rest the palm on a button to press it.
+- **Owner lock.** Register (face, then left hand, then right hand) so only the
+  owner's hands control the canvas.
+- **Look-away pause.** When she is not facing the screen, a "Not facing" pill
+  shows and the hands stop acting ([src/ui/facingBanner.ts](src/ui/facingBanner.ts)).
+- **Voice or typing.** Speak through Chrome's speech recognition, or type in
+  "Type or say a command…".
+- **Read aloud.** Replies, review titles and refusals are spoken with the
+  browser's on-device voices ([src/ai/speaker.ts](src/ai/speaker.ts)).
+- **Her language.** A Gemini-written pack translates the bar and the review
+  words, and adds spoken phrases for the lamp and canvas commands
+  ([src/canvas/languagePack.ts](src/canvas/languagePack.ts)).
+- **Teach a gesture.** Record a few samples, say what the gesture should do,
+  and approve it.
+- **Fixed limits.** "Set the lamp to 500 percent" gets "Lamps go from 10 to
+  100 %. Nothing changed." The check is a fixed rule, not a model
+  ([src/canvas/deviceGuard.ts](src/canvas/deviceGuard.ts)).
+
+## Devices
+
+- **WiZ lamp** through a local bridge, `scripts/wiz-bridge.mjs`. Browsers cannot
+  send UDP, so this small Node process talks to the bulb and listens only on
+  127.0.0.1 by default with a per-run token. "Connect the lamp" asks Gemini to
+  write the connector. The canvas starts with no lamps: the lamps it shows are
+  the bulbs the bridge finds ([src/canvas/realLamps.ts](src/canvas/realLamps.ts)).
+- **Spotify** (Premium) for the speaker tile. When Spotify is not connected,
+  nothing plays and the tile says so ([src/canvas/spotifyConnector.ts](src/canvas/spotifyConnector.ts)).
+- **Phones as companions** (Capacitor apps in `android/` and `ios/`, Swift in
+  `ios-src/`). A phone joins the laptop with a short sound chime or a typed
+  code. You can hold a board at the edge of the screen to send it to the phone
+  ("Moved from laptop"). The phone's AI activity shows in the laptop's AI
+  monitor.
+- **DockKit gimbal** (iPhone): the stand nods when you approve something, and
+  can follow your hands
+  ([ios-src/MendcraftGimbalPlugin.swift](ios-src/MendcraftGimbalPlugin.swift)).
+
+---
+
+## Setup and run
 
 ```bash
-npx vitest run     # unit suite: op validator, engine, undo/redo, printability,
-                   # rule parser, router, confidence, a11y, ledger/privacy drift,
-                   # queue, language, recipes, screen-grader helpers, …
-npm run build      # tsc type-check + production build
-npm run eval:commands   # offline command-accuracy eval → eval/summary.md
-npm run a11y:axe        # WCAG axe audit over every main screen (report, not a gate)
+npm install
+cp .env.example .env.local   # your Firebase web config + reCAPTCHA Enterprise site key; never commit it
+npm run dev                  # http://localhost:5173/canvas.html
+npm run build                # tsc + vite build (needs a real Firebase API key and site key)
+npm run wiz-bridge           # optional: a real WiZ bulb on your network; prints a token
 ```
 
-### Screenshots + a second-opinion grader
+- **Firebase project:** turn on Firebase AI Logic (Gemini Developer API) and App
+  Check with reCAPTCHA Enterprise. The console steps are in
+  [docs/CONSOLE-STEPS.md](docs/CONSOLE-STEPS.md).
+- **Local App Check:** put `APPCHECK_DEBUG_TOKEN=<uuid>` in `.env.local` and
+  register that token in Firebase console → App Check → Manage debug tokens. The
+  dev server injects it into local pages only; it is never written into `dist`.
+- **Without Firebase config** the canvas opens, but neither Nano nor Gemini
+  runs, and it says so.
+- **WiZ:** open the canvas once with `?wizToken=<printed token>`. The token is
+  stored and then removed from the address bar.
+- **Spotify:** set `VITE_SPOTIFY_CLIENT_ID` (a public client ID; sign-in uses
+  PKCE).
 
-`scripts/screens.mjs` drives the real app headlessly through the judge path and
-writes a numbered PNG per milestone (+ a real exported DXF) to `../screens`.
-
-`scripts/grade-screens.mjs` then asks a model from a **different company than the
-one that builds the app** — Google's **Antigravity `agy` CLI** (Gemini) — to grade
-each PNG on a fixed JSON rubric: **legibility, target size, contrast, clutter, and
-does-it-match-the-caption**, plus an overall score and a would-I-ship boolean.
+## Tests
 
 ```bash
-node scripts/screens.mjs          # needs playwright + a chromium (writes ../screens)
-node scripts/grade-screens.mjs    # grades them with agy; writes ../screens/grades.json
+npm test             # vitest unit suite (tests/**/*.test.ts)
+npx vite             # then, in a second terminal:
+npm run e2e          # scripts/e2e-actual.mjs: the whole demo journey in Chrome from recorded replies and SIM devices
+npm run eval:commands
+npm run a11y:axe
 ```
 
-It shells out to `agy -p … --output-format json --json-schema …` in print mode.
-If `agy` is not installed it prints **"skipped: no grader available"** and exits 0
-— grading is an optional review pass, never a build gate. Captions come from an
-optional `<screens>/captions.json`, else they are derived from the filename. The
-pure parsing/caption/summary logic is `scripts/screenGrade.lib.mjs` (unit-tested
-in `tests/screenGrade.test.ts`); the script itself never calls `agy` during the
-test suite.
+`npm run e2e` replays model replies from `tests/fixtures/`. The page does not
+script them. The test checks every review, the lamp refusal, an offline reload
+that stays in Kannada, a tampered stored artifact, and export/import.
 
 ---
 
 ## Honest limits
 
-- **Cross-device sync is still-based, not WebRTC** — Firestore is enabled, but
-  frames go over it as low-rate stills and sync needs **both devices online in the
-  same room/book**; when no room is reachable the demo transport takes over.
-  `/control` only ever receives the privacy-safe snapshot, never the full document.
-- **Kannada rules accuracy is 0** by design (the offline rule parser is
-  English-only); Kannada is deliberately routed to the cloud or clarified, and the
-  badge says so.
-- **WiZ lamp / Spotify / Android assist / point-and-say** need a real device,
-  the local bridge, a Spotify Client ID + Premium account, or a live camera frame respectively; each
-  degrades to an honest "not configured" state rather than faking a connection.
-  Spotify sign-in uses PKCE in the web app; the iOS Capacitor shell cannot finish
-  the `/spotify` redirect yet — connect at https://mendcraft.web.app instead.
-- **iOS** is a Capacitor shell (built on a Mac); the gimbal needs the iPhone app.
-- **Gemini Nano** runs in desktop Chrome and on Android AICore devices only;
-  other phones route through the desktop hub or are labelled `Gemini (no Nano on this phone)`.
+- **Nano needs desktop Chrome with on-device AI enabled.** Without it, the
+  "Nano" step is done by Gemini and the route line says so ("Nano isn't
+  available here").
+- **Voice needs the network.** Chrome's speech recognition does not work
+  offline. Offline, type the command.
+- **Offline reload.** Approved artifacts live in IndexedDB, but the page itself
+  and the MediaPipe files come from the network or the browser cache. We test
+  the offline reload against a local server (`npm run e2e`). On the live site,
+  load the page while online first.
+- **iPhone on-device AI is not Firebase AI Logic, and it is untested.** In the
+  iOS shell, the "Nano" step can call Apple Foundation Models directly through
+  our Capacitor plugin
+  ([src/ai/appleAI.ts](src/ai/appleAI.ts),
+  [ios-src/MendcraftAppleAIPlugin.swift](ios-src/MendcraftAppleAIPlugin.swift)).
+  The note in `appleAI.ts` explains why: the Firebase iOS hybrid API it was
+  written against was removed, so it calls Apple's framework directly. We have
+  not run this path on a device. The web app and the demo do not use it.
+- **Phones are companions.** `npm run e2e` covers pairing and sending a board
+  to SIM phones. We have not tested AI requests made on the phones themselves,
+  and no automated test covers the real gimbal.
+- **Real devices.** The lamp needs a WiZ bulb and the local bridge. The speaker
+  needs Spotify Premium. Without them those tiles say what is missing; they do
+  not fake a connection.
+- **Kannada:** the pack translates the bar, the review words and a set of
+  command phrases. Model prompts and replies stay in English.
 
----
+## Built during the submission period
+
+Started on 12 Nov 2026 from the Vite vanilla-ts starter. Everything else was
+written during the submission period. Mendcraft has no public users yet.
 
 ## Pre-existing code and libraries
 
-All project code was written during the contest (from 12 Nov 2026). The only
-pre-existing code is the `create-vite` vanilla-ts starter (MIT), since replaced.
+The only pre-existing code is the `create-vite` vanilla-ts starter (MIT), which
+has since been replaced.
 
 | Library | License | Use |
-|---|---|---|
-| firebase (`firebase/ai`, `firebase/app-check`, Remote Config, Performance) | Apache-2.0 | Hybrid inference, App Check, config, tracing |
-| @mediapipe/tasks-vision (HandLandmarker) | Apache-2.0 | Hand landmarks (local sensor) |
-| three + three-bvh-csg | MIT | 3D viewport + CSG |
-| @capacitor/* | MIT | Android/iOS shells |
-| vite, typescript, vitest, axe-core, puppeteer-core, playwright | MIT / Apache-2.0 | Tooling, audits, screenshots |
+| --- | --- | --- |
+| firebase (`firebase/ai`, `firebase/app-check`, Remote Config, Performance, Firestore) | Apache-2.0 | Hybrid inference, App Check, config, tracing, phone link |
+| @a2ui/lit, @a2ui/web_core | Apache-2.0 | Rendering boards |
+| lit | BSD-3-Clause | Web components |
+| @mediapipe/tasks-vision | Apache-2.0 | Hand and face landmarks (on device) |
+| three, three-bvh-csg | MIT | 3D floor-plan view |
+| zod | MIT | Schema checks |
+| qrcode | MIT | Pairing codes |
+| @capacitor/* | MIT | Android and iOS shells |
+| vite, vitest, happy-dom | MIT | Build and tests |
+| typescript, puppeteer-core, fake-indexeddb | Apache-2.0 | Type-check, e2e, tests |
+| axe-core | MPL-2.0 | Accessibility audit (dev only) |
 
-No third-party logos or trademarks are included. **License:** Apache-2.0 (see
-[LICENSE](LICENSE)).
+No third-party logos or trademarks are included.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
