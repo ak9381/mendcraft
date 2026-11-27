@@ -94,8 +94,28 @@ export function formatSimBytes(simBytes: number): string {
   return `SIM · would send ${formatBytesShort(simBytes)}`;
 }
 
+/** Entries a ledger keeps for inspection; older ones are folded into the
+ *  running totals (a tab open for hours must not grow without limit). */
+export const LEDGER_KEEP = 500;
+
 export function createCanvasLedger(): CanvasLedger {
-  const entriesList: LedgerEntry[] = [];
+  let entriesList: LedgerEntry[] = [];
+  /** Entries folded out of the list (their bytes are in the totals). */
+  let folded = new WeakSet<LedgerEntry>();
+  let totals: LedgerTotals;
+  /** The last external engine that really sent bytes (for formatLine). */
+  let lastExternalEngine = 'Gemini';
+  const reset = (): void => {
+    totals = { totalBytes: 0, byEngine: {}, count: 0, aiBytes: 0, aiCount: 0, spotifyBytes: 0, spotifyCount: 0, simBytes: 0 };
+    lastExternalEngine = 'Gemini';
+  };
+  reset();
+  const addTo = (engine: string, bytes: number): void => {
+    totals.totalBytes += bytes;
+    totals.byEngine[engine] = (totals.byEngine[engine] ?? 0) + bytes;
+    if (isAiEngine(engine)) totals.aiBytes += bytes; else totals.spotifyBytes += bytes;
+    if (isAiEngine(engine) && bytes > 0) lastExternalEngine = engine;
+  };
 
   return {
     record(input: LedgerRecordInput): LedgerEntry {
@@ -108,40 +128,25 @@ export function createCanvasLedger(): CanvasLedger {
         ? { engine: input.engine, bytes: 0, at, sim: true, simBytes: would }
         : { engine: input.engine, bytes: would, at };
       entriesList.push(entry);
+      totals.count += 1;
+      if (isAiEngine(entry.engine)) { totals.aiCount += 1; totals.simBytes += entry.simBytes ?? 0; } else totals.spotifyCount += 1;
+      addTo(entry.engine, entry.bytes);
+      if (entriesList.length > LEDGER_KEEP) {
+        for (const old of entriesList.splice(0, entriesList.length - LEDGER_KEEP)) folded.add(old);
+      }
       return entry;
     },
 
     addBytes(entry: LedgerEntry, bytes: number): void {
-      if (entry.sim || !entriesList.includes(entry)) return;
+      if (entry.sim || !(folded.has(entry) || entriesList.includes(entry))) return;
       // Negative takes back a send that turned out never to have left.
-      entry.bytes = Math.max(0, entry.bytes + Math.round(bytes));
+      const next = Math.max(0, entry.bytes + Math.round(bytes));
+      addTo(entry.engine, next - entry.bytes);
+      entry.bytes = next;
     },
 
     totals(): LedgerTotals {
-      let totalBytes = 0;
-      let aiBytes = 0;
-      let aiCount = 0;
-      let spotifyBytes = 0;
-      let spotifyCount = 0;
-      let simBytes = 0;
-      const byEngine: Record<string, number> = {};
-
-      for (const e of entriesList) {
-        totalBytes += e.bytes;
-        if (isAiEngine(e.engine)) { aiBytes += e.bytes; aiCount += 1; simBytes += e.simBytes ?? 0; } else { spotifyBytes += e.bytes; spotifyCount += 1; }
-        byEngine[e.engine] = (byEngine[e.engine] ?? 0) + e.bytes;
-      }
-
-      return {
-        totalBytes,
-        byEngine,
-        count: entriesList.length,
-        aiBytes,
-        aiCount,
-        spotifyBytes,
-        spotifyCount,
-        simBytes,
-      };
+      return { ...totals, byEngine: { ...totals.byEngine } };
     },
 
     entries(): readonly LedgerEntry[] {
@@ -149,24 +154,13 @@ export function createCanvasLedger(): CanvasLedger {
     },
 
     formatLine(): string {
-      let totalBytes = 0;
-      let lastExternalEngine = 'Gemini';
-
-      for (const e of entriesList) {
-        if (!isAiEngine(e.engine)) continue;
-        totalBytes += e.bytes;
-        if (e.bytes > 0) {
-          lastExternalEngine = e.engine;
-        }
-      }
-
-      const line = formatLedgerLine({ bytes: totalBytes, engine: lastExternalEngine });
-      const sim = this.totals().simBytes;
+      const line = formatLedgerLine({ bytes: totals.aiBytes, engine: lastExternalEngine });
+      const sim = totals.simBytes;
       return sim > 0 ? `${line} · ${formatSimBytes(sim)}` : line;
     },
 
     formatSpotifyLine(): string {
-      const t = this.totals();
+      const t = totals;
       if (!t.spotifyCount) return '';
       const b = t.spotifyBytes;
       const size = b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b} B`;
@@ -174,7 +168,9 @@ export function createCanvasLedger(): CanvasLedger {
     },
 
     clear(): void {
-      entriesList.length = 0;
+      entriesList = [];
+      folded = new WeakSet();
+      reset();
     },
   };
 }

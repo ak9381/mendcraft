@@ -9,6 +9,7 @@ const MODEL_URL =
 
 import { createHandsProcessor, type HandEvent, type HandFrame } from './handLogic';
 import { ensureSquareCanvas, unletterboxLandmarks } from './squareFrame';
+import { createFrameGate } from './frameGate';
 
 export type { HandEvent, HandFrame } from './handLogic';
 
@@ -34,6 +35,9 @@ export function createHandTracker(
   let rafId = 0;
   let running = false;
   let squareBuf: HTMLCanvasElement | null = null;
+  const frameGate = createFrameGate();
+  let trackingErrors = 0;
+  let lastTs = 0;
   const processor = createHandsProcessor(onEvent);
 
   function setPinchThreshold(on: number, off: number): void {
@@ -54,16 +58,26 @@ export function createHandTracker(
       rafId = requestAnimationFrame(loop);
       return;
     }
-    let src: HTMLVideoElement | HTMLCanvasElement = video;
+    // One run per new camera frame (the display runs faster than the camera).
+    if (!frameGate.isNewFrame(video.currentTime)) { rafId = requestAnimationFrame(loop); return; }
     try {
-      if (!squareBuf) squareBuf = (video.ownerDocument ?? document).createElement('canvas');
-      src = ensureSquareCanvas(video, squareBuf);
-    } catch { /* keep the raw video if the canvas path fails */ }
-    const result = landmarker.detectForVideo(src, performance.now());
-    if (src !== video && result.landmarks) {
-      result.landmarks = result.landmarks.map((lm) => unletterboxLandmarks(lm, video.videoWidth, video.videoHeight));
+      let src: HTMLVideoElement | HTMLCanvasElement = video;
+      try {
+        if (!squareBuf) squareBuf = (video.ownerDocument ?? document).createElement('canvas');
+        src = ensureSquareCanvas(video, squareBuf);
+      } catch { /* keep the raw video if the canvas path fails */ }
+      const now = performance.now();
+      const result = landmarker.detectForVideo(src, now > lastTs ? now : (lastTs += 0.5));
+      lastTs = Math.max(lastTs, now);
+      if (src !== video && result.landmarks) {
+        result.landmarks = result.landmarks.map((lm) => unletterboxLandmarks(lm, video.videoWidth, video.videoHeight));
+      }
+      handleResult(result);
+    } catch (err) {
+      // One bad frame must never end the loop for good.
+      trackingErrors++;
+      if (trackingErrors <= 3) console.warn('[hands] tracking run failed:', err);
     }
-    handleResult(result);
     rafId = requestAnimationFrame(loop);
   }
 

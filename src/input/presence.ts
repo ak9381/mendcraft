@@ -5,6 +5,7 @@
 // hands (≤2) drive the existing pinch processor. Exposes a small facing API
 // (isFacing / onFacingChange) plus register / re-register for future Relay code.
 
+import { createFrameGate } from './frameGate';
 import {
   FilesetResolver,
   HandLandmarker,
@@ -228,6 +229,8 @@ export function createPresenceTracker(
   let backoffUntil = -Infinity;
   let lastRunSlow = false;
   let ts = 0;
+  const frameGate = createFrameGate();
+  let trackingErrors = 0;
 
   const processor = createHandsProcessor(onEvent);
   const facingTracker = createFacingTracker(opts?.facing);
@@ -393,11 +396,25 @@ export function createPresenceTracker(
     }
     const at = performance.now();
     const minGap = opts?.frameIntervalMs?.() ?? 0;
-    if ((minGap > 0 && at - lastRunAt < minGap) || at < backoffUntil) {
+    if ((minGap > 0 && at - lastRunAt < minGap) || at < backoffUntil || !frameGate.isNewFrame(video.currentTime)) {
       rafId = requestAnimationFrame(loop);
       return;
     }
     lastRunAt = at;
+    try {
+      track();
+    } catch (err) {
+      // One bad frame (a lost GPU context, a model error) must never end the
+      // loop for good: say it a few times, wait a moment, carry on.
+      trackingErrors++;
+      if (trackingErrors <= 3) console.warn('[presence] tracking run failed:', err);
+      backoffUntil = performance.now() + 500;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function track(): void {
+    const at = lastRunAt;
     ts = at;
     // Timestamps must strictly increase per MediaPipe task.
     // Face runs at a few fps (FACE_INTERVAL_MS) so the small Facing pill
@@ -430,7 +447,6 @@ export function createPresenceTracker(
     const spent = doneAt - at;
     backoffUntil = doneAt + trackingBackoffMs(spent, lastRunSlow);
     lastRunSlow = spent > SLOW_TRACKING_RUN_MS;
-    rafId = requestAnimationFrame(loop);
   }
 
   async function start(existing?: MediaStream): Promise<void> {
@@ -493,6 +509,7 @@ export function createPresenceTracker(
     stream = got.stream;
     ownsStream = got.owns;
     video.srcObject = stream;
+    frameGate.reset();
     await video.play();
     if (stopped) { stop(); return; }
 
