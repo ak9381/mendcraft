@@ -273,6 +273,8 @@ export default defineConfig(({ mode, command }) => {
       input: {
         main: path.join(root, 'index.html'),
         canvas: path.join(root, 'canvas.html'),
+        monitor: path.join(root, 'monitor.html'),
+        activity: path.join(root, 'activity.html'),
       },
     },
   },
