@@ -51,3 +51,16 @@ describe('ask first', () => {
     expect(askFirst(run('showDevices'), 'build me about to keep track of my devices').kind).toBe('run');
   });
 });
+
+import { statusNotDashboard } from '../../src/canvas/intentRouter';
+describe('status board, not dashboard', () => {
+  const dash = decideIntent({ intent: 'buildDashboard', confidence: 0.95 });
+  it('status words and no control words → the status board', () => {
+    const d = statusNotDashboard(dash, 'something to keep track of all my devices and their status');
+    expect(d.kind === 'run' && d.action.id).toBe('showDevices');
+  });
+  it('control words keep the dashboard', () => {
+    const d = statusNotDashboard(dash, 'a board to control my lamp and see its status');
+    expect(d.kind === 'run' && d.action.id).toBe('buildDashboard');
+  });
+});

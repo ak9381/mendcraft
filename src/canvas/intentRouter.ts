@@ -16,8 +16,8 @@ export interface IntentAction {
 }
 
 export const INTENT_ACTIONS: readonly IntentAction[] = [
-  { id: 'showDevices', label: 'build the devices board', describe: 'a board that lists every connected device and its status, with a button to connect another (NOT the dashboard)', phrase: () => 'show my devices' },
-  { id: 'buildDashboard', label: 'build the dashboard', describe: 'the dashboard: one board with controls for the connected devices (lamp, speaker, gimbal)', phrase: () => 'build the dashboard' },
+  { id: 'showDevices', label: 'build the status board', describe: 'the STATUS board: a list of her devices showing only whether each is connected / working, plus a button to connect another. Words like "keep track", "status", "what is connected", "see all my devices" mean this. It has NO controls.', phrase: () => 'show my devices' },
+  { id: 'buildDashboard', label: 'build the dashboard', describe: 'the DASHBOARD: buttons and sliders to CONTROL devices (turn the lamp on, dim it, play music, move the gimbal). Words like "control", "turn on", "dim", "play" mean this.', phrase: () => 'build the dashboard' },
   { id: 'connectGimbal', label: 'connect the gimbal', describe: 'connect / add the gimbal stand the iPhone sits on', phrase: () => 'connect the gimbal' },
   { id: 'pointConnect', label: 'connect what you are pointing at', describe: 'connect the device she is pointing at with her hand (the camera takes one photo)', phrase: () => 'connect what I am pointing at' },
   { id: 'connectPhones', label: 'connect your phones', describe: 'pair / connect her phones (iPhone, Android) to this laptop', phrase: () => 'connect my phones' },
@@ -45,6 +45,8 @@ export function intentPrompt(text: string): string {
     'Actions:',
     ...INTENT_ACTIONS.map((a) => `- ${a.id}: ${a.describe}`),
     `- ${CHAT_INTENT}: a question, small talk, or anything that is none of the above`,
+    'There are three different boards: the status board (showDevices), the dashboard with controls (buildDashboard), and the floor plan (floorPlan).',
+    'Examples: "build me a board to keep track of my devices and their status" -> showDevices. "make a dashboard to control my lamp and speaker" -> buildDashboard. "draw my flat" -> floorPlan.',
     'A question about something (what is…, how does…) is chat, not an action.',
     'Reply with JSON only: {"intent": one id above, "confidence": 0 to 1}. Use chat when unsure what to do.',
     `She said: "${text.replace(/"/g, "'").slice(0, 300)}"`,
@@ -91,7 +93,17 @@ export function decideIntent(p: IntentPick | null): IntentDecision {
 const ASK_FIRST: ReadonlySet<string> = new Set(['floorPlan']);
 const QUESTION_RE = /^\s*(?:what|why|how|who|when|where|which)\b|\?\s*$/i;
 const REQUEST_RE = /^\s*(?:can|could|would|will)\s+you\b/i;
-export function askFirst(d: IntentDecision, text: string): IntentDecision {
+const STATUS_WORDS = /\b(?:status|statuses|keep\s+track|track\s+of|connected|what(?:'|’)?s\s+(?:on|connected)|working|online)\b/i;
+const CONTROL_WORDS = /\b(?:control|controls|turn\s+(?:on|off)|switch|dim|brighten|brightness|volume|play|pause|slider|buttons?\s+to)\b/i;
+/** Status words and no control words: the status board, whatever Nano said. */
+export function statusNotDashboard(d: IntentDecision, text: string): IntentDecision {
+  if (d.kind === 'chat' || d.action.id !== 'buildDashboard') return d;
+  if (!STATUS_WORDS.test(text) || CONTROL_WORDS.test(text)) return d;
+  const show = INTENT_ACTIONS.find((a) => a.id === 'showDevices')!;
+  return { kind: d.kind, action: show };
+}
+export function askFirst(d0: IntentDecision, text: string): IntentDecision {
+  const d = statusNotDashboard(d0, text);
   if (d.kind !== 'run') return d;
   if (ASK_FIRST.has(d.action.id)) return { kind: 'ask', action: d.action };
   if (QUESTION_RE.test(text) && !REQUEST_RE.test(text)) return { kind: 'ask', action: d.action };

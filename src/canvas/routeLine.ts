@@ -125,7 +125,9 @@ const DEVICES_BOARD_RE = /\b(?:build|make|create|give|set\s+up|show|put|draw|wan
 const DEVICES_SEE_RE = /\b(?:see|view|show|list|track)\s+(?:them|it|all\s+of\s+them|(?:all\s+)?(?:my|the|these|our)\s+devices)\s+on\s+(?:this|a|the|one)\s+board\b/i;
 const DEVICES_WHY_RE = /\b(?:track|status|statuses|connected|overview|monitor|see|view|list|show|what(?:'|’)?s\s+(?:on|connected))\b/i;
 // Speech hears "a board" as "about", "a bored", "a boat", "abort"…
-const fixBoard = (t: string): string => t.replace(/\b(build|make|create|give|set\s+up)(\s+me)?\s+(?:about|a\s*bout|a\s+bored|a\s+bord|a\s+boat|abort|aboard)\b/gi, '$1$2 a board');
+export const fixBoard = (t: string): string => t
+  .replace(/^\s*(?:belt|bolt|built|bill|felt|bell)\s+me\b/i, 'build me')
+  .replace(/\b(build|make|create|give|set\s+up)(\s+me)?\s+(?:about|a\s*bout|a\s+bored|a\s+bord|a\s+boat|a\s+bird|a\s+bold|abort|aboard)\b/gi, '$1$2 a board');
 export const isShowDevices = (raw: string): boolean => {
   const text = fixBoard(raw);
   return SHOW_DEVICES_RE.test(text)

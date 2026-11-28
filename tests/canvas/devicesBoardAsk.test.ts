@@ -31,3 +31,12 @@ describe('devices board ask', () => {
     expect(onlyConnectedTiles([{ type: 'stat', label: 'Temp', value: '21' }] as never)).toBe(false);
   });
 });
+
+describe('more mishearings of "build me a board"', () => {
+  it('belt / bird / bored still build the status board', () => {
+    for (const t of [
+      'belt me a bored to keep track of all my devices and their status and point and connect another if needed',
+      'build me a bird to keep track of all my devices and their status and to point and connect another if needed',
+    ]) expect(routeLine(t, w).name, t).toBe('showDevices');
+  });
+});

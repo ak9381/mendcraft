@@ -146,7 +146,7 @@ import { coerceNextSteps, createNextStepChips, planExtraRan, plainStep, STEPS_CO
 import { extractJson } from '../ai/cloudJson';
 import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
-import { isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
+import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
@@ -5793,7 +5793,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function intentTurn(text: string): Promise<void> {
     const nano = engineFor('nano', 'ask');
     if (!nano || nano.id !== 'nano' || nano.sim || reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
-    const si: SentInfo = { engine: 'nano', prompt: intentPrompt(text), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
+    const si: SentInfo = { engine: 'nano', prompt: intentPrompt(fixBoard(text)), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
     aiSent(text, si, { task: 'generic', swarm: false });
     say(INTENT_WORKING_LINE);
     const t0 = Date.now();
