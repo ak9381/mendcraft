@@ -33,7 +33,7 @@ import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
 import { mountAskCard } from './askCard';
-import { askLine, decideIntent, INTENT_CONSTRAINT, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
+import { askLine, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
 import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -5793,17 +5793,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!nano || nano.id !== 'nano' || nano.sim || reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
     const si: SentInfo = { engine: 'nano', prompt: intentPrompt(text), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
     aiSent(text, si, { task: 'generic', swarm: false });
+    say(INTENT_WORKING_LINE);
+    const t0 = Date.now();
     const panel = panels.forEngine('nano');
     let full = '';
     try {
       full = await Promise.race([
         nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160 }),
-        new Promise<string>((res) => { setTimeout(() => res(''), 8000); }),
+        new Promise<string>((res) => { setTimeout(() => res(''), INTENT_WAIT_MS); }),
       ]);
     } catch { full = ''; }
     const pick = parseIntent(full);
     const d = decideIntent(pick);
-    const conf = pick ? ` (${Math.round(pick.confidence * 100)}%)` : '';
+    const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
     settleEngines();
     if (d.kind === 'run') {
       panel.log('done', `understood: ${d.action.label}${conf}`);
