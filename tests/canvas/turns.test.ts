@@ -36,7 +36,7 @@ describe('turns', () => {
     expect(intent).toContain('if (!t.live() ||');
     expect(intent).toContain('say(INTENT_STILL_LINE)');
     const chat = src.slice(src.indexOf('async function openEndedTurn('), src.indexOf('// ---- commands ----'));
-    expect(chat).toContain("text: 'dropped: stale'");
+    expect(chat).toContain("stageFor(t, 'dropped: stale')");
   });
 });
 
@@ -83,6 +83,6 @@ describe('outcome contract', () => {
     expect(src).toContain("say(choicesSpoken(cs), { speak: true, outcome: 'asked' });");
     expect(src).toContain("if (++misses >= 2) { misses = 0; say(cantDoYetLine(), { speak: true, outcome: 'refused' });");
     expect(src).toContain("guarded.replaced ? { kind: 'refused', line: reply, reason: 'promise guard' }");
-    expect(src).toContain("if (r.name !== 'openEnded') { turn.ranRoute(r.name); misses = 0; }");
+    expect(src).toMatch(/if \(r\.name !== 'openEnded'\) \{\s*turn\.ranRoute\(r\.name\); misses = 0;/);
   });
 });

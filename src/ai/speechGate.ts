@@ -19,6 +19,8 @@ export interface SpeechGateDeps {
   hasBeenActive(): boolean;
   /** Read aloud is on at all (off: nothing is held, no chip). */
   enabled(): boolean;
+  /** This browser can speak at all (no synth: lines are text, nothing logged). */
+  supported?(): boolean;
   /** Show this chip text, or take it down (null). */
   chip(text: string | null): void;
   /** Call `f` once, on her first pointerdown or keydown. */
@@ -65,8 +67,13 @@ export function createSpeechGate(inner: ReadAloud, d: SpeechGateDeps): SpeechGat
     if (!waitingGesture) { waitingGesture = true; d.onFirstGesture(release); }
   };
   const blocked = (): boolean => d.enabled() && !d.hasBeenActive();
+  let lastWhy = '';
   const spoke = (ok: boolean, what: string): boolean => {
-    if (!ok && d.enabled()) d.log?.(`speech: not spoken (${stuck ? 'voice stuck' : 'speaker said no'}): ${what.slice(0, 60)}`);
+    if (ok) { lastWhy = ''; return ok; }
+    if (!d.enabled() || d.supported?.() === false) return ok;
+    // Once per reason in a row, not once per line.
+    const why = stuck ? 'voice stuck' : 'no on-device voice for it, or it was said just now';
+    if (why !== lastWhy) { lastWhy = why; d.log?.(`speech: not spoken (${why}): ${what.slice(0, 60)}`); }
     return ok;
   };
   return {

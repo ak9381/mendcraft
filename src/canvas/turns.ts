@@ -115,3 +115,37 @@ export function watchdogOutcome(t: Turn): Outcome | null {
 /** Second command in a row that nothing could place: refuse, don't ask again. */
 export const CANT_YET_PHRASES = ['show my devices', 'build the dashboard', 'draw a floor plan'] as const;
 export const cantDoYetLine = (): string => `I can’t do that yet. Try: ${CANT_YET_PHRASES.map((p) => `“${p}”`).join(', ')}.`;
+
+// ---- the turn log: window.__mcTurns (the demo checklist and tests read it) ----
+
+export type Tier = 'modal' | 'fixed' | 'nano' | 'clarify' | 'chat';
+export interface TurnRecord {
+  id: number; raw: string; text: string; fixes: string[];
+  tier: Tier | null; modal: string | null; outcome: OutcomeKind | null; ms: number | null;
+  /** The rules-lane lines for this turn, in order. */
+  stages: string[];
+}
+export interface TurnLog {
+  begin(id: number, raw: string, text: string, fixes: readonly string[]): void;
+  /** First tier wins (a routed Nano pick stays "nano"). */
+  tier(id: number, tier: Tier): void;
+  patch(id: number, p: Partial<Pick<TurnRecord, 'modal' | 'outcome' | 'ms'>>): void;
+  stage(id: number, line: string): void;
+  /** Oldest first, at most `max`. A live array: the same object every time. */
+  entries(): TurnRecord[];
+}
+export function createTurnLog(max = 50): TurnLog {
+  const list: TurnRecord[] = [];
+  const find = (id: number): TurnRecord | undefined => { for (let i = list.length - 1; i >= 0; i--) if (list[i]!.id === id) return list[i]; return undefined; };
+  return {
+    begin(id, raw, text, fixes) {
+      list.push({ id, raw, text, fixes: [...fixes], tier: null, modal: null, outcome: null, ms: null, stages: [] });
+      if (list.length > max) list.splice(0, list.length - max);
+    },
+    tier(id, tier) { const r = find(id); if (r && !r.tier) r.tier = tier; },
+    patch(id, p) { const r = find(id); if (r) Object.assign(r, p); },
+    stage(id, line) { find(id)?.stages.push(line); },
+    entries: () => list,
+  };
+}
+export { rootOf as rootTurn };

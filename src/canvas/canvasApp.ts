@@ -149,7 +149,7 @@ import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withCo
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
 import { createSpeechGate, VOICE_STUCK_LINE } from '../ai/speechGate';
-import { cantDoYetLine, createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, watchdogOutcome, type Outcome, type OutcomeKind, type Turn } from './turns';
+import { cantDoYetLine, createTurnLog, createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, rootTurn, watchdogOutcome, type Outcome, type OutcomeKind, type Turn, type TurnRecord } from './turns';
 import { answersPrompt, CANCEL_RE, CANCELLED_LINE, createConversation, MODAL_PRIORITY } from './conversation';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
@@ -1274,6 +1274,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     hasBeenActive: () => (typeof navigator === 'undefined' ? true
       : (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive !== false),
     enabled: () => readAloud && !phoneShell,
+    supported: () => speaker.supported,
     chip: (text) => {
       if (!speechChip) return;
       speechChip.textContent = text ?? '';
@@ -1286,7 +1287,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       window.addEventListener('pointerdown', once, true);
       window.addEventListener('keydown', once, true);
     },
-    log: (line) => aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: line }),
+    log: (line) => stage(line),
   });
   /** `speak`: true reads this line aloud; a string reads that instead.
    *  `outcome`: this line closes her turn (turns.ts) and is marked ✓ ? ✕. */
@@ -1295,6 +1296,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  chat answer for an older line says and does nothing. */
   const turns = createTurns();
   let turn: Turn = turns.begin('');
+  /** The last 50 lines, for the demo checklist and tests (window.__mcTurns). */
+  const turnLog = createTurnLog();
+  if (typeof window !== 'undefined') (window as unknown as { __mcTurns?: TurnRecord[] }).__mcTurns = turnLog.entries();
+  /** One rules-lane line per stage of her turn (heard, fixed, modal, route,
+   *  nano, outcome, dropped, speech), also kept on the turn's record. */
+  function stageFor(t: Turn, line: string): void {
+    aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: line });
+    turnLog.stage(rootTurn(t).id, line);
+  }
+  function stage(line: string): void { stageFor(turn, line); }
   /** The last root turn the watchdog spoke for (it speaks once per turn). */
   let cuedTurn = 0;
   /** Lines that never count as "something was said" for the turn. */
@@ -1302,7 +1313,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** Close a turn (first wins) and mark the status line with how it ended. */
   function settleTurn(t: Turn, o: Outcome): void {
     if (!t.settle(o)) return;
-    aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: `outcome ${o.kind}${o.reason ? ` (${o.reason})` : ''} ${((Date.now() - t.startedAt) / 1000).toFixed(1)} s` });
+    const root = rootTurn(t);
+    const ms = Date.now() - root.startedAt;
+    turnLog.patch(root.id, { outcome: o.kind, ms });
+    stageFor(t, `outcome ${o.kind}${o.reason ? ` (${o.reason})` : ''} ${(ms / 1000).toFixed(1)} s`);
   }
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
   let intentBusy = false;
@@ -5679,6 +5693,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function openEndedTurn(text: string): Promise<void> {
     // Chat answers what she said, not the fixed-up line routing read.
     text = heardRaw.get(text) ?? text;
+    turnLog.tier(rootTurn(turn).id, 'chat');
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.', { outcome: 'refused' }); return; }
     const nano = engineFor('nano', 'ask');
     const gemini = engineFor('gemini', 'ask');
@@ -5721,7 +5736,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         live.update(safe);
       }, prepare);
     } catch (e) {
-      if (!t.live()) { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: 'dropped: stale' }); settleEngines(); autoHideAi(); return; }
+      if (!t.live()) { stageFor(t, 'dropped: stale'); settleEngines(); autoHideAi(); return; }
       const why = `No answer. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true, outcome: 'refused' });
@@ -5729,7 +5744,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return;
     }
     // She said something else meanwhile: this reply is for an older line.
-    if (!t.live()) { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: 'dropped: stale' }); panels.forEngine(r.engineId).log('done', 'reply dropped: you had moved on'); settleEngines(); autoHideAi(); return; }
+    if (!t.live()) { stageFor(t, 'dropped: stale'); panels.forEngine(r.engineId).log('done', 'reply dropped: you had moved on'); settleEngines(); autoHideAi(); return; }
     // A cloud reply may carry the redaction tokens back: real names return on this device.
     const guarded = promiseGuard(r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply, text);
     const reply = guarded.reply;
@@ -5911,7 +5926,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
     if (!nano || nano.id !== 'nano' || nano.sim) {
       // No Nano here: a command still asks, never chats.
-      if (isCommand(text) && askCard && !opts.sim) { offerChoices(text, null); return; }
+      if (isCommand(text) && askCard && !opts.sim) { turnLog.tier(rootTurn(turn).id, 'clarify'); stage('no Nano → choices'); offerChoices(text, null); return; }
       void openEndedTurn(text); return;
     }
     const si: SentInfo = { engine: 'nano', prompt: intentPrompt(fixBoard(text)), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
@@ -5941,6 +5956,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const d = askFirst(decideIntent(pick), text);
     const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
     settleEngines();
+    const placed = d.kind !== 'chat' && (d.kind === 'run' || !!askCard);
+    const next = d.kind === 'run' ? 'run' : placed ? 'ask' : isCommand(text) ? 'choices' : 'chat';
+    turnLog.tier(rootTurn(t).id, next === 'choices' ? 'clarify' : next === 'chat' ? 'chat' : 'nano');
+    stageFor(t, `nano ${d.kind === 'chat' ? (pick?.intent ?? 'no answer') : d.action.id}${pick ? ` ${Math.round(pick.confidence * 100)}%` : ''} ${((Date.now() - t0) / 1000).toFixed(1)} s → ${next}`);
     if (d.kind === 'run') {
       panel.log('done', `understood: ${d.action.label}${conf}`);
       say(understoodLine(d.action));
@@ -5980,7 +5999,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const NO_LINE_RE = /^\s*(?:no|nope|nah|wrong)\b/i;
   const conversation = createConversation({
     say: (line) => say(line, { speak: true }),
-    log: (line) => aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: line }),
+    log: (line) => stage(line),
   });
   conversation.register({
     id: 'review', kind: 'blocking', priority: MODAL_PRIORITY.review, listens: false,
@@ -6063,13 +6082,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // fixed line; the caption above and chat keep what she said.
     const heard = hear(text);
     if (heard.fixes.length) { if (heardRaw.size > 50) heardRaw.clear(); heardRaw.set(heard.text, heard.raw); }
+    if (!routingIntent) {
+      turnLog.begin(turn.id, heard.raw, heard.text, heard.fixes);
+      stage(`heard "${heard.raw.slice(0, 120)}"`);
+      for (const f of heard.fixes) stage(`fixed ${f}`);
+    }
     text = heard.text;
     // Whatever waits for her answer gets the line first (conversation.ts):
     // the review, "Did you mean…", the gimbal questions, the morph card,
     // pair-first, "Lamp 1 or Lamp 2?" — in that order, one claimant.
     const owned = conversation.handle(heard);
     if (owned.claimed) {
-      misses = 0;
+      turnLog.patch(rootTurn(turn).id, { modal: owned.by ?? null });
+      turnLog.tier(rootTurn(turn).id, 'modal');
       if (owned.claim === 'reprompt') settleTurn(turn, { kind: 'asked', line: statusEl.textContent ?? '', reason: `modal ${owned.by}` });
       else if (!turn.route()) settleTurn(turn, { kind: 'answered', line: statusEl.textContent ?? '', reason: `modal ${owned.by}` });
       return true;
@@ -6079,7 +6104,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const planBoard = routePlanBoard();
     const r = routeLine(text, routeWorld(planBoard));
     const ranOn = focusId;
-    if (r.name !== 'openEnded') { turn.ranRoute(r.name); misses = 0; }
+    if (r.name !== 'openEnded') {
+      turn.ranRoute(r.name); misses = 0;
+      if (!routingIntent) turnLog.tier(rootTurn(turn).id, 'fixed');
+      stage(`route ${r.name} (${routingIntent ? 'picked' : 'fixed'})`);
+    }
     switch (r.name) {
       case 'paletteOpen': openTools(); return true;
       case 'paletteClose': closeTools(); return true;
