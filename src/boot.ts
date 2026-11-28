@@ -10,7 +10,7 @@
 //   /phone (or ?view=phone)    → the remote's "lamp & music" PWA variant [flag: remote]
 //   /control                   → the iPad control room          [flag: control]
 //   /judges                    → the old guided-tour page       [flag: judgesLegacy]
-//   /spotify                   → Spotify OAuth callback, used only by the old studio's music panel [flag: studio]
+//   /spotify                   → Spotify OAuth callback (the canvas's Connect Spotify and the old studio's music panel)
 
 import { isControlRoute, isJudgesRoute, isLandingRoute, isPhoneRoute, isRemoteRoute, isSpotifyRoute } from './relay/protocol';
 import { loadFlags } from './core/flags';
@@ -37,12 +37,11 @@ if (wantsCanvas(window.location.pathname, window.location.search, isNativeShell)
   // she came from. Only the old studio's music panel sends anyone here, so it
   // is gated the same as that studio (the 'studio' flag persists across the
   // OAuth round trip via localStorage, since the provider drops query params).
-  if (flags.has('studio')) {
-    const { handleSpotifyCallback } = await import('./music/spotifyCallback');
-    await handleSpotifyCallback();
-  } else {
-    window.location.replace(canvasUrl(window.location.search));
-  }
+  // The canvas connects Spotify too (the status board's Connect Spotify), so
+  // the callback always finishes the sign-in; it checks the code against the
+  // PKCE session this browser started, and returns to the page she came from.
+  const { handleSpotifyCallback } = await import('./music/spotifyCallback');
+  await handleSpotifyCallback();
 } else if (isPhoneRoute(window.location.pathname, window.location.search)) {
   // /phone is the iPhone PWA install target: the remote page in its compact
   // "lamp & music" variant (large play/pause, volume, lamp on/off/dim).
