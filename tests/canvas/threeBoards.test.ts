@@ -74,7 +74,7 @@ describe('the live devices rows (the devices board itself is generated)', () => 
       { device: 'Nothing phone', status: 'Not paired', ok: false, kind: 'Phone' },
       { device: 'Lamp', status: 'WiZ · answering', ok: true, kind: 'Lamp' },
       { device: 'Lamp 2', status: 'Not reachable', ok: false, kind: 'Lamp' },
-      { device: 'Speaker', status: 'Spotify · iPhone', ok: true, kind: 'Speaker' },
+      { device: 'Speaker', status: 'Spotify · playing on iPhone', ok: true, kind: 'Speaker' },
     ]);
   });
   it('gimbal words, no stand, Chrome blocking, Spotify not connected, SIM never ticked', () => {
@@ -159,5 +159,15 @@ describe('review fixes: saved boards from before the floor plan had its own boar
   it('a turn on the floor-plan board is a floor plan, whatever kind the model wrote', () => {
     expect(app).toContain('const fitted = fitPlan(planForBoard(frameId, proposed));');
     expect(app).toMatch(/reg\.get\(frameId\)\?\.kind === 'plan' && plan\.kind !== 'plan' \? \{ \.\.\.plan, kind: 'plan' \}/);
+  });
+});
+
+import { connectedDeviceRows as rowsOf } from '../../src/canvas/connectedDevices';
+describe('the connected speaker row', () => {
+  it("shows the speaker's own name, ticked once Spotify is linked", () => {
+    const r = rowsOf({ lamps: [], speaker: { sim: false, spotifyTokens: true, playingOn: '', label: 'Marshall speaker' } });
+    expect(r.find((x) => x.kind === 'Speaker')).toMatchObject({ device: 'Marshall speaker', status: 'Spotify connected', ok: true });
+    const off = rowsOf({ lamps: [], speaker: { sim: false, spotifyTokens: false, playingOn: '', label: 'Marshall speaker' } });
+    expect(off.find((x) => x.kind === 'Speaker')).toMatchObject({ status: 'Spotify not connected', ok: false });
   });
 });

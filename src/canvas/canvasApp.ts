@@ -3673,8 +3673,36 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
 
   /** A connect AI turn (point / by-name / scan): visible receipt and ghost, then
    *  a Proposal whose keep MERGES the tiles into the board (no dupes, ≤ MAX_TILES). */
+  /** The speaker she connected, remembered so the status list shows it. */
+  const SPEAKER_LISTED_KEY = 'mc.speakerListed';
+  function speakerListed(): boolean { try { return !!storage?.getItem(SPEAKER_LISTED_KEY); } catch { return false; } }
+  function listedSpeakerLabel(): string | null { try { return storage?.getItem(SPEAKER_LISTED_KEY) || null; } catch { return null; } }
+  /** On the status board, connecting a device adds it to the live list (a
+   *  row), never a control tile: controls live on the dashboard. */
+  function connectToList(turn: ConnectTurnResult): void {
+    const tiles = turn.plan.tiles.flatMap(function flat(t: TileSpec): TileSpec[] {
+      return (t.type === 'row' || t.type === 'grid' || t.type === 'card') ? t.children.flatMap(flat) : [t];
+    });
+    const said: string[] = [];
+    for (const t of tiles) {
+      if (t.type === 'music') {
+        const id = loadTokens() && !opts.sim ? SPOTIFY_SPEAKER_ID : t.deviceId;
+        if (!store.get(id)) store.add(id, { cls: 'music', on: false, brightness: 0, playing: false, trackTitle: '', source: 'spotify', playingOn: '', sim: !!opts.sim });
+        DEVICE_LABELS[id] = t.label;
+        try { storage?.setItem(SPEAKER_LISTED_KEY, t.label); } catch { /* the row shows for this session */ }
+        said.push(loadTokens() ? `${t.label} connected — it's on your devices list.` : `${t.label} added to your devices list. Sign in to Spotify to play on it.`);
+      } else if (t.type === 'lamp' || t.type === 'switch') {
+        said.push(store.get(t.deviceId) ? `${t.label} is already on your devices list.` : `${t.label} added to your devices list.`);
+      }
+    }
+    refreshLiveTables();
+    const line = said.join(' ') || 'Nothing new to add to your devices list.';
+    panels.forEngine('nano').log('done', `devices list: ${line}`);
+    say(line, { speak: true });
+  }
   async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; prebookedBytes?: number; note?: string; swarm?: boolean } = {}): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
+    if (isDevicesBoard(surfaces[frameId])) { connectToList(turn); return true; }
     turnBusy = true;
     try {
       const f = reg.get(frameId); if (!f) return false;
@@ -5537,14 +5565,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       label: DEVICE_LABELS[id] ?? id,
       state: opts.sim ? 'sim' as const : !bridgeStatus.up || d.unreachable || d.sim ? 'unreachable' as const : 'answering' as const,
     }));
-    const music = Object.values(store.all()).some((d) => d.playing !== undefined);
+    const musicIds = Object.entries(store.all()).filter(([, d]) => d.playing !== undefined).map(([id]) => id);
+    // A speaker is listed once she connected it (or a board already uses it):
+    // signing in to Spotify alone doesn't put it on her devices list.
+    const music = musicIds.length > 0 && (!!opts.sim || speakerListed() || Object.values(surfaces).some((p) => p.tiles.some(function has(t: TileSpec): boolean {
+      return t.type === 'music' || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && t.children.some(has))
+        || (t.type === 'tabs' && t.tabs.some((tab) => tab.children.some(has))) || (t.type === 'split' && [...t.first, ...t.second].some(has));
+    })));
     return {
       laptop: true,
       iphone: ios ? { sim: ios.sim, answering: ios.sim || phoneAnswering('ios'), gimbal: ios.sim ? (opts.simStand ? simG : 'none') : sense?.gimbal ?? null, sensor: ios.sim ? simGimbalMode === 'hands' : sense?.sensor } : null,
       android: android ? { sim: android.sim, answering: android.sim || phoneAnswering('android') } : null,
       lamps,
       lampWhy: lnaLine,
-      speaker: music ? { sim: !!opts.sim, spotifyTokens: !opts.sim && !!loadTokens(), playingOn: musicWhere.spotify ? musicWhere.target : '' } : null,
+      speaker: music ? { sim: !!opts.sim, spotifyTokens: !opts.sim && !!loadTokens(), playingOn: musicWhere.spotify ? musicWhere.target : '', label: listedSpeakerLabel() ?? DEVICE_LABELS[musicIds[0]!] } : null,
     };
   }
   const phoneAnswering = (platform: string): boolean => Date.now() - (phoneSeenAt.get(platform) ?? -Infinity) <= PHONE_FRESH_MS;

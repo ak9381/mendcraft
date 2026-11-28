@@ -38,7 +38,7 @@ export interface ConnectedInput {
   /** Why no lamp can be reached ('' = no extra reason). */
   lampWhy?: string;
   /** The speaker tile's player. */
-  speaker?: { spotifyTokens: boolean; playingOn: string; sim: boolean } | null;
+  speaker?: { spotifyTokens: boolean; playingOn: string; sim: boolean; label?: string } | null;
 }
 
 const gimbalWords = (g: GimbalState | null, sensor?: boolean): string => {
@@ -71,10 +71,11 @@ export function connectedDeviceRows(i: ConnectedInput): DeviceRow[] {
     else push('Lamp', l.label, 'SIM lamp', false);
   }
   if (i.speaker) {
-    if (i.speaker.sim) push('Speaker', 'Speaker', 'SIM · simulated speaker', false);
-    else if (i.speaker.spotifyTokens && i.speaker.playingOn) push('Speaker', 'Speaker', `Spotify · ${i.speaker.playingOn}`, true);
-    else if (i.speaker.spotifyTokens) push('Speaker', 'Speaker', 'Spotify connected · nothing playing yet', false);
-    else push('Speaker', 'Speaker', 'Spotify not connected', false);
+    const name = i.speaker.label || 'Speaker';
+    if (i.speaker.sim) push('Speaker', name, 'SIM · simulated speaker', false);
+    else if (i.speaker.spotifyTokens && i.speaker.playingOn) push('Speaker', name, `Spotify · playing on ${i.speaker.playingOn}`, true);
+    else if (i.speaker.spotifyTokens) push('Speaker', name, 'Spotify connected', true);
+    else push('Speaker', name, 'Spotify not connected', false);
   }
   return rows;
 }
