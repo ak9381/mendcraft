@@ -209,5 +209,15 @@ describe('connectSheet', () => {
       expect(host.innerHTML).toContain('data-connect="name"');
       expect(host.innerHTML).toContain('data-connect="phone"');
     });
+
+    it('phoneOnly ("connect iPhone"): goes straight to pairing, no point/name/phone options on screen', () => {
+      const host = createMockElement('div');
+      mountConnectSheet(host, {}, { phoneOnly: true });
+      expect(host.innerHTML).toContain('Pair phone');
+      expect(host.innerHTML).not.toContain('Connect a device');
+      expect(host.innerHTML).not.toContain('data-connect="point"');
+      expect(host.innerHTML).not.toContain('data-connect="name"');
+      expect(host.innerHTML).not.toContain('data-connect="phone"');
+    });
   });
 });

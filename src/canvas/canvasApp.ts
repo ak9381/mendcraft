@@ -4024,14 +4024,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!host) return;
     host.hidden = false;
     flowOwnsHost = flowOpening;
+    // A phone pairing flow ("connect iPhone", "connect devices") goes straight
+    // to the chime: no point / name / phone choice on screen.
+    const phoneOnly = flowOpening;
     const sheet = mountConnectSheet(host, {
       onPoint: () => { closeConnectSheet(); void pointTurn(id); },
       onName: (name) => { closeConnectSheet(); void nameTurn(id, name); },
       onJoinPhone: () => { void joinPhone(id); },
       onClose: () => { host.hidden = true; sheetOpen = null; },
-    });
+    }, { phoneOnly });
     sheetOpen = { frameId: id, host, sheet };
-    say('Connect a device: point at it, say its name, or join a phone.');
+    if (!phoneOnly) say('Connect a device: point at it, say its name, or join a phone.');
   }
   /** Close the card that was admitting one more phone, keeping the relay. */
   function endExtraPairing(session: HostSession): void {

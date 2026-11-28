@@ -82,8 +82,21 @@ export function connectSheetOptions(): readonly { id: string; label: string; des
 export function mountConnectSheet(
   host: HTMLElement,
   callbacks: ConnectSheetCallbacks = {},
+  opts: { phoneOnly?: boolean } = {},
 ): ConnectSheet {
-  const html = `
+  // phoneOnly: "connect iPhone" / "connect devices" go straight to the chime;
+  // only the title and the status line show until the pairing card replaces it.
+  if (opts.phoneOnly) {
+    host.innerHTML = `
+    <section class="mc-connect-sheet" role="region" aria-label="Pair phone">
+      <div class="mc-connect-head">
+        <h2 class="mc-prop-title">Pair phone</h2>
+        <button type="button" class="mc-btn mc-connect-close" aria-label="Close connect sheet">✕</button>
+      </div>
+      <p class="mc-connect-status" role="status" aria-live="polite"></p>
+    </section>`.trim();
+  }
+  const html = opts.phoneOnly ? host.innerHTML : `
     <section class="mc-connect-sheet" role="region" aria-label="Connect a device">
       <div class="mc-connect-head">
         <h2 class="mc-prop-title">Connect a device</h2>
@@ -123,7 +136,7 @@ export function mountConnectSheet(
     </section>
   `.trim();
 
-  host.innerHTML = html;
+  if (!opts.phoneOnly) host.innerHTML = html;
   const element = host.querySelector<HTMLElement>('.mc-connect-sheet') ?? host;
   const statusEl = host.querySelector<HTMLElement>('.mc-connect-status');
 
