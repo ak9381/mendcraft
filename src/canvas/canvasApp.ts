@@ -33,6 +33,7 @@ import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
 import { mountAskCard } from './askCard';
+import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -3880,6 +3881,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // show the identify in this phone's AI feed (→ the monitor's iPhone tab).
       const idNote = r ? `identify for the laptop: ${r.identity.label} (${r.identity.kind}) · ${Math.round(r.identity.confidence * 100)}% · ${r.source === 'cloud' ? 'Gemini · cloud' : 'on device'}` : 'identify for the laptop: nothing recognised';
       ledgerPointFailure(r, o, idNote);
+      // On this phone only: the photo it took, what it was, where it went.
+      if (typeof document !== 'undefined') {
+        const known = !!r && r.identity.kind !== 'none';
+        try { showPointPhoto(root, shot, pointPhotoCaption({ label: known ? r!.identity.label : null, cloud: (trace.cloudSends ?? 0) > 0 || r?.source === 'cloud', bytes: shot.bytes })); } catch { /* preview only */ }
+      }
       sendBack(r && r.identity.kind !== 'none'
         ? { ok: true, identity: r.identity, source: r.source, ms: r.ms, cropBytes: shot.bytes, cloudSends: Math.max(r.source === 'cloud' ? 1 : 0, trace.cloudSends ?? 0) }
         : { ok: false, reason: 'unidentified', message: 'The iPhone couldn’t tell what that was.' });
@@ -5380,6 +5386,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       // over and starts the web tracker itself only as the fallback.
       const native = !!getGimbalPlugin()?.startHandTracking && !!opts.phoneCamera?.setYield;
       if (phoneSensor && mode === 'hands' && !native) { void phoneSensor.request('follow', true).then(run); return; }
+      // Follow me: DockKit follows what the camera sees, so the camera must run
+      // (the same as tapping Track).
+      if (phoneSensor && mode === 'face') { void phoneSensor.request('follow', false); void phoneSensor.request('pill', true).then(run); return; }
       if (phoneSensor && !native) void phoneSensor.request('follow', false);
       run();
       return;
@@ -5745,7 +5754,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Connecting is all it does: no board turn (the dashboard, with the
     // gimbal and the lamp, waits for "build the dashboard"). The Connected
     // row shows it.
-    proceed: () => { gimbalConnected = true; rowChanged(); },
+    // Then follow her face: the iPhone turns its camera on (Track) so DockKit really follows.
+    proceed: () => { gimbalConnected = true; rowChanged(); gimbalMode('face'); },
     show: (q) => { if (q) askCard?.show(q); else askCard?.hide(); },
   });
   function run(text: string): boolean {

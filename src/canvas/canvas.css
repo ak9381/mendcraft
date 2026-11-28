@@ -2129,3 +2129,11 @@
 .mc-ask-actions { display: flex; gap: 12px; }
 .mc-ask-actions .mc-btn { flex: 1 1 0; min-height: 60px; font-size: 20px; }
 .mc-ask-hint { margin: 14px 0 0; font-size: 14px; color: #6B655C; }
+
+/* iPhone: the photo a point took (pointPhotoCard.ts). */
+.mc-point-photo { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 70;
+  width: min(86vw, 360px); box-sizing: border-box; padding: 14px; background: #FBF7EF; color: #2B2B2B;
+  border: 1px solid var(--border, #E4E0D8); border-radius: 18px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22); }
+.mc-point-photo-title { font-size: 15px; font-weight: 650; margin: 0 0 10px; }
+.mc-point-photo img { display: block; width: 100%; height: auto; border-radius: 12px; background: #ddd; }
+.mc-point-photo-caption { margin: 10px 0 0; font-size: 14px; line-height: 1.35; color: #4A453D; }

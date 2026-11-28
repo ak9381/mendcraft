@@ -96,7 +96,10 @@ export function matchScrollVoice(text: string): { dir: 'up' | 'down'; page: bool
 
 // "connect / add (to) what(ever) I'm pointing at", or a bare "connect this"
 // (not "connect this room", which is connectRoom).
-const POINT_CONNECT_RE = /\b(connect|add) (to )?(what|whatever) i(['’]m| am)? point(ing)? at\b|^\s*(please\s+)?connect this\s*[.!?]?\s*$/i;
+// Speech often adds "to" or drops "at": "connect to what I'm pointing",
+// "connect what I am pointing to", "connect the thing I'm pointing at".
+const POINT_CONNECT_RE = /\b(?:connect|add|pair|link)(?:\s+(?:to|with))?\s+(?:what|whatever|the\s+(?:thing|device|one)|this\s+thing)(?:\s+that)?\s+i(?:['’]m|\s+am)?\s+(?:point(?:ing|ed)?|showing)(?:\s+(?:at|to|towards?))?\b|^\s*(?:please\s+)?connect this\s*[.!?]?\s*$/i;
+export function isPointConnectAsk(text: string): boolean { return POINT_CONNECT_RE.test(text); }
 
 /** "make a dashboard for my desk lamp", "build me a control panel", "I want a
  *  dashboard": a request to BUILD a board — a board turn with a review, never
