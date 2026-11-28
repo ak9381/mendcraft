@@ -7,7 +7,9 @@ import { readFileSync } from 'node:fs';
 import { mountCanvas, type CanvasHandle } from '../../src/canvas/canvasApp';
 import { joinCanvasDoc } from '../../src/canvas/canvasPersistence';
 import { coerceSurfacePlan, expandPlan, type SurfacePlan } from '../../src/canvas/surfacePlan';
-import { coerceDeviceFields, liveRows, TICK, type DeviceRow } from '../../src/canvas/connectedDevices';
+import { coerceDeviceFields, LIVE_TABLE_EMPTY, liveRows, TICK, type DeviceRow } from '../../src/canvas/connectedDevices';
+import { buildControlSnapshot, coerceDeviceRows, coerceSnapshot, DEVICE_ROWS_MAX } from '../../src/relay/controlSnapshot';
+import { applyGuestSnapshot } from '../../src/canvas/phoneCanvasRuntime';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from '../../src/canvas/devicesTurn';
 import { unsupportedConstraintKeywords } from '../../src/canvas/nanoPlan';
 import { gateMessages } from '../../src/canvas/gate';
@@ -139,4 +141,89 @@ describe('the live table on the canvas', () => {
     const t = saved.at(-1)!.surfaces.f1.tiles[0] as { rows: string[][] };
     expect(t.rows).toEqual([]);
   }, 15000);
+});
+
+describe('a devices board on the phone shows the laptop\'s rows', () => {
+  let handle: CanvasHandle | null = null;
+  afterEach(() => { handle?.destroy(); handle = null; document.body.innerHTML = ''; });
+  const DEV: SurfacePlan = { kind: 'room', title: 'My devices', tiles: [{ type: 'table', title: 'Devices', columns: ['Device', 'Status'], rows: [], source: 'devices', fields: ['device', 'status'] }] };
+  const LAPTOP_ROWS: DeviceRow[] = [
+    { device: 'Laptop', status: 'This canvas', ok: true, kind: 'Laptop' },
+    { device: 'Nothing phone', status: 'Paired', ok: true, kind: 'Phone' },
+    { device: 'Desk lamp', status: 'Answering', ok: true, kind: 'Lamp' },
+  ];
+  function phone(): { h: CanvasHandle; root: HTMLElement } {
+    if (!globalThis.matchMedia) (globalThis as { matchMedia?: unknown }).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const root = document.createElement('div');
+    document.body.append(root);
+    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, connector: { run: async () => ({}) }, phoneShell: true, nativePhone: false });
+    return { h: handle, root };
+  }
+  const tableText = (root: HTMLElement): string => [...root.querySelectorAll('mc-table-tile')].map((t) => t.shadowRoot?.textContent ?? '').join(' ');
+  const rowsOf = (root: HTMLElement): string[] => [...root.querySelectorAll('mc-table-tile')].flatMap((t) => [...(t.shadowRoot?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent?.trim()).join(' | ')));
+  const send = (h: CanvasHandle, o: Record<string, unknown>): boolean => {
+    const snap = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 1, board: DEV, boardFor: 'android', boardBy: 'gemini', pins: { ios: null, android: 'f4' }, boardPin: 'f4', ...o }))));
+    return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, 'android', undefined, undefined, () => { h.clearRemoteBoards(); });
+  };
+
+  it('the sent rows, never "Not paired"; changed rows re-render', async () => {
+    const { h, root } = phone();
+    expect(send(h, { deviceRows: LAPTOP_ROWS })).toBe(true);
+    await vi.waitFor(() => expect(rowsOf(root)).toEqual([`${TICK} Laptop | This canvas`, `${TICK} Nothing phone | Paired`, `${TICK} Desk lamp | Answering`]), { timeout: 4000 });
+    expect(tableText(root)).not.toContain('Not paired');
+    expect(send(h, { rev: 2, deviceRows: [...LAPTOP_ROWS, { device: 'iPhone', status: 'Paired · Gimbal: docked', ok: true, kind: 'Phone' }] })).toBe(true);
+    await vi.waitFor(() => expect(rowsOf(root)).toContain(`${TICK} iPhone | Paired · Gimbal: docked`), { timeout: 4000 });
+    expect(h.frames()).toHaveLength(1);
+  }, 15000);
+
+  it('a devices board with no rows yet (an old laptop) says so, never guesses', async () => {
+    const { root, h } = phone();
+    expect(send(h, {})).toBe(true);
+    await vi.waitFor(() => expect(tableText(root)).toContain(LIVE_TABLE_EMPTY), { timeout: 4000 });
+    expect(tableText(root)).not.toContain('Not paired');
+  }, 15000);
+
+  it('rows on the wire are checked and capped', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ device: `D${i}`, status: 'x'.repeat(200), ok: i % 2 === 0 ? true : 'yes', kind: 'k'.repeat(50) }));
+    const snap = coerceSnapshot(JSON.parse(JSON.stringify({ ...buildControlSnapshot({ rev: 1, board: DEV, boardBy: 'gemini' }), deviceRows: [...many, { status: 'no name' }] })))!;
+    expect(snap.deviceRows).toHaveLength(DEVICE_ROWS_MAX);
+    expect(snap.deviceRows![0].status).toHaveLength(80);
+    expect(snap.deviceRows![0].kind).toHaveLength(24);
+    expect(snap.deviceRows![1].ok).toBe(false);
+    expect(coerceSnapshot({ v: 1, rev: 1, deviceRows: [{ device: 'x', status: 'y', ok: true }] })!.deviceRows).toBeUndefined(); // no board, no rows
+    expect(coerceDeviceRows('nope')).toBeNull();
+    expect(coerceDeviceRows([{ device: '<b>Lamp</b>', status: 'ok', ok: true }])).toEqual([{ device: 'b Lamp /b', status: 'ok', ok: true }]);
+  });
+});
+
+describe('the laptop puts its live rows beside a devices board it sends', () => {
+  let handle: CanvasHandle | null = null;
+  afterEach(() => { handle?.destroy(); handle = null; document.body.innerHTML = ''; try { localStorage.clear(); } catch { /* none */ } });
+  type Win = { __mcLastBoardSnapshot?: { deviceRows?: DeviceRow[]; boardSend?: unknown; board?: unknown } };
+  it('at the send, and again (no arrival stamp) when the rows change', async () => {
+    if (!globalThis.matchMedia) (globalThis as { matchMedia?: unknown }).matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const plan: SurfacePlan = { kind: 'room', title: 'My devices', tiles: [{ type: 'table', title: 'Devices', columns: ['Device', 'Status'], rows: [], source: 'devices', fields: ['device', 'status'] }] };
+    const doc = joinCanvasDoc({ version: 1, camera: { x: 0, y: 0, z: 1 }, focusId: 'f1', frames: [{ id: 'f1', kind: 'room', title: 'My devices', rect: { x: 0, y: 0, w: 1000, h: 680 }, pinned: false }] },
+      [sampleBoard('f1', { title: 'My devices' }, plan)]) as CanvasDoc;
+    delete (window as Win).__mcLastBoardSnapshot;
+    const root = document.createElement('div');
+    document.body.append(root);
+    handle = mountCanvas(root, {
+      autoHands: false, reducedMotion: true, sim: true, connector: { run: async () => ({}) }, doc, artifactBy: () => 'gemini',
+      devices: { 'wiz-lamp-1': { cls: 'lamp', on: false, brightness: 50, sim: true } }, deviceLabels: { 'wiz-lamp-1': 'Lamp' },
+    });
+    const h = handle;
+    h.run('connect devices');
+    await vi.waitFor(() => expect(h.edgeLayout().right).toBeTruthy(), { timeout: 18000 });
+    await h.focus('f1');
+    expect(await h.sendBoard('right')).toBe(true);
+    const sent = (window as Win).__mcLastBoardSnapshot!;
+    expect(sent.deviceRows?.map((r) => r.device)).toContain('Lamp');
+    expect(sent.deviceRows?.map((r) => r.device)).not.toContain('Speaker');
+    h.store.add('speaker-sim', { cls: 'music', on: false, brightness: 0, playing: false, sim: true });
+    await vi.waitFor(() => expect((window as Win).__mcLastBoardSnapshot!.deviceRows?.map((r) => r.device)).toContain('Speaker'), { timeout: 6000 });
+    const again = (window as Win).__mcLastBoardSnapshot!;
+    expect(again.board).toBeTruthy();
+    expect(again.boardSend).toBeUndefined();
+  }, 45000);
 });

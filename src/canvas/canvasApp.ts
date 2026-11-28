@@ -431,6 +431,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  on receive and saved). A board she made here herself is never one,
    *  whoever its maker is recorded as. */
   const receivedFrames = new Set<string>(phoneShell ? reg.list().filter((f) => f.from === 'laptop' && surfaces[f.id]).map((f) => f.id) : []);
+  /** Phone: the laptop's live devices-table rows per received board (never stored). */
+  const remoteRows = new Map<string, DeviceRow[]>();
   const nowFn = opts.now ?? (() => Date.now());
   // Touch works by default; look-to-edit is opt-in (mc.lookToEdit) and an
   // unknown face signal (null) never locks.
@@ -688,7 +690,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** A plan drawing changed on `frameId` (an edit, an approved voice edit, an
    *  Undo): the phone holding that board gets the new drawing — the same
    *  republish (and the same target) as any other board update. */
-  function planDrawingChanged(frameId: string): void {
+  function planDrawingChanged(frameId: string): void { scheduleRepublish(frameId); }
+  /** A board a phone holds changed (its drawing, its live rows): that phone
+   *  gets it again, at most once a second, trailing. */
+  function scheduleRepublish(frameId: string): void {
     if (!(hostSession || simWire) || !sentBoard.all().some((p) => p.frameId === frameId)) return;
     planEditedFrames.add(frameId);
     if (planRepublishTimer) return;
@@ -708,6 +713,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   /** "Couldn't send" is said once per failure run, not for every retry. */
   let publishFailSaid = false;
+  /** The device rows last put on the wire per board (a change republishes). */
+  const rowsSent = new Map<string, string>();
+  function rowsForWire(frameId: string): DeviceRow[] {
+    const rows = liveDeviceRows();
+    if (frameId) rowsSent.set(frameId, JSON.stringify(rows));
+    return rows;
+  }
   /** What is drawn on `frameId`'s plan tiles right now: the live boards first
    *  (the drawing as it is on screen), else what was saved with the board. */
   function boardDrawingsOf(frameId: string, board: SurfacePlan): Record<string, unknown> {
@@ -780,6 +792,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // here). A tile transfer keeps today's shape (no pins): both phones
         // see the board the tile left, as before.
         ...(t ? {} : { pins: sentBoard.pins() }),
+        // A devices board carries the laptop's live rows: the phone shows what
+        // the laptop sees (never its own "Not paired").
+        ...(board && liveTablesReady && isDevicesBoard(board) ? { deviceRows: rowsForWire(frameId) } : {}),
         ...(!t && board && boardFor && sentBoard.pins()[boardFor] ? { boardPin: sentBoard.pins()[boardFor] } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
@@ -5754,6 +5769,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** A board's live-table rows for this render ([] before the wiring exists,
    *  or when the board has no live table). */
   function liveRowsFor(plan: SurfacePlan, frameId: string): DeviceRow[] {
+    // A board from the laptop shows the laptop's rows — never this phone's guesses.
+    if (receivedFrames.has(frameId)) return isDevicesBoard(plan) ? (remoteRows.get(frameId) ?? []) : [];
     if (!liveTablesReady || !isDevicesBoard(plan)) return [];
     const rows = liveDeviceRows();
     liveShown.set(frameId, JSON.stringify(rows));
@@ -5762,7 +5779,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function refreshLiveTables(): void {
     if (!liveTablesReady) return;
     const sig = JSON.stringify(liveDeviceRows());
+    // A devices board on a phone: its rows changed here → the phone gets them
+    // (the same ≤ 1 s trailing republish as a drawing edit; no arrival glow).
+    if (!phoneShell) {
+      for (const pin of sentBoard.all()) {
+        const id = pin.frameId;
+        if (id && isDevicesBoard(surfaces[id] ?? pin.board) && rowsSent.has(id) && rowsSent.get(id) !== sig) scheduleRepublish(id);
+      }
+    }
     for (const f of reg.list()) {
+      if (receivedFrames.has(f.id)) continue; // the laptop's rows: redrawn when it sends them
       if (!isDevicesBoard(surfaces[f.id])) { liveShown.delete(f.id); continue; }
       if (liveShown.get(f.id) === sig) continue;
       renderSurface(f.id);
@@ -6924,7 +6950,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     reg.remove(id);
     delete surfaces[id];
     delete drawings[id];
-    receivedFrames.delete(id); receivedMakers.delete(id);
+    receivedFrames.delete(id); receivedMakers.delete(id); remoteRows.delete(id);
     if (focusId === id) focusId = null;
     if (lastFocus === id) lastFocus = null;
   }
@@ -6944,7 +6970,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     fitPhone();
     return gone.length;
   }
-  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; by?: ArtifactBy; arrived?: boolean } = {}): void {
+  function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; by?: ArtifactBy; arrived?: boolean; deviceRows?: DeviceRow[] } = {}): void {
     // Each board once: a board that arrives again (replay on re-pair, a
     // republish) goes to the frame already showing it; other copies go.
     // A board she made here is never written over: a new board from the
@@ -6963,6 +6989,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     }
     reg.markFromLaptop(id); // only received boards are ever seen as copies (and carried back)
     surfaces[id] = plan;
+    // The laptop's live rows for a devices board (none yet: the table says so).
+    if (info.deviceRows) remoteRows.set(id, info.deviceRows.map((r) => ({ ...r })));
     if (info.by) receivedMakers.set(id, { by: info.by, entries: entriesOn(id) });
     else receivedMakers.delete(id);
     receivedFrames.add(id);

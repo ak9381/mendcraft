@@ -225,6 +225,9 @@ export interface ControlSnapshot {
   /** The pin id the carried `board` belongs to (a phone only takes a board
    *  whose boardPin is its own pin). */
   boardPin?: string;
+  /** The laptop's live devices-table rows, beside a devices `board`: a phone
+   *  shows these (what the laptop sees), never its own guesses. Capped. */
+  deviceRows?: SnapshotDeviceRow[];
   /** The most recent committed tile transfer (for the enter-from-edge animation). */
   transfer?: TransferMarker;
   omitted: SnapshotOmissions;
@@ -275,6 +278,8 @@ export interface ControlSnapshotInput {
   pins?: unknown;
   /** The pin id `board` belongs to (checked; dropped without a board). */
   boardPin?: unknown;
+  /** Live devices-table rows for `board` (checked and capped; dropped without a board). */
+  deviceRows?: unknown;
   /** Drawings the SENDER already left out (a rebuilt wire snapshot keeps
    *  the count, so the phone can say so). */
   omittedDrawings?: unknown;
@@ -424,6 +429,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
   const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
   const pins = input.pins !== undefined && input.pins !== null ? coercePins(input.pins) : null;
   const boardPin = board && typeof input.boardPin === 'string' && PIN_RE.test(input.boardPin) ? input.boardPin : null;
+  const deviceRows = board && input.deviceRows !== undefined && input.deviceRows !== null ? coerceDeviceRows(input.deviceRows) : null;
 
   const snap: ControlSnapshot = {
     v: SNAPSHOT_VERSION,
@@ -446,6 +452,7 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(boardDrawings ? { boardDrawings } : {}),
     ...(pins ? { pins } : {}),
     ...(boardPin ? { boardPin } : {}),
+    ...(deviceRows ? { deviceRows } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
@@ -662,12 +669,33 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     boardDrawings: r.boardDrawings,
     pins: r.pins,
     boardPin: r.boardPin,
+    deviceRows: r.deviceRows,
     omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
 }
 
 const PIN_RE = /^[\w-]{1,40}$/;
+
+/** One live devices-table row on the wire (connectedDevices.DeviceRow). */
+export interface SnapshotDeviceRow { device: string; status: string; ok: boolean; kind?: string }
+export const DEVICE_ROWS_MAX = 24;
+/** Rows off the wire: text cut to size, `ok` a boolean, at most 24; a row
+ *  with no device name is dropped. Not an array: null. */
+export function coerceDeviceRows(raw: unknown): SnapshotDeviceRow[] | null {
+  if (!Array.isArray(raw)) return null;
+  const text = (v: unknown, n: number): string => (typeof v === 'string' ? v.replace(/[\u0000-\u001f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n) : '');
+  const out: SnapshotDeviceRow[] = [];
+  for (const r of raw) {
+    if (out.length >= DEVICE_ROWS_MAX) break;
+    const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    const device = text(o.device, 80);
+    if (!device) continue;
+    const kind = text(o.kind, 24);
+    out.push({ device, status: text(o.status, 80), ok: o.ok === true, ...(kind ? { kind } : {}) });
+  }
+  return out;
+}
 /** Pins off the wire: each phone's id checked, anything else null. */
 function coercePins(raw: unknown): { ios: string | null; android: string | null } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

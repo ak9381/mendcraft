@@ -42,8 +42,8 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 export const BOARD_NO_MAKER_LINE = "Couldn't take the board — it doesn't say who made it. Nothing changed.";
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy' | 'boardSend' | 'pins' | 'boardPin'> & { omitted?: { drawings?: number } },
-  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy']; arrived?: boolean }) => void,
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy' | 'boardSend' | 'pins' | 'boardPin' | 'deviceRows'> & { omitted?: { drawings?: number } },
+  showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy']; arrived?: boolean; deviceRows?: ControlSnapshot['deviceRows'] }) => void,
   platform?: PhonePlatform,
   onRefuse?: (line: string) => void,
   /** Phone: lights the board only for a real new send (boardGlow.ts). A
@@ -70,7 +70,8 @@ export function applyGuestSnapshot(
   // the board on the laptop rides with it too: the phone keeps it under that name.
   const omitted = snap.omitted?.drawings ?? 0;
   const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now(), { live: !arrival.buffered });
-  showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy, ...(arrived ? { arrived } : {}) });
+  // The laptop's live device rows ride with a devices board: the phone shows those.
+  showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy, ...(arrived ? { arrived } : {}), ...(snap.deviceRows ? { deviceRows: snap.deviceRows } : {}) });
   return true;
 }
 
