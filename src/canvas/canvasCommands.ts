@@ -13,7 +13,16 @@ export type CanvasCommand =
   | { type: 'goTo'; target: string }
   | { type: 'keep' }
   | { type: 'drop' }
-  | { type: 'undo' };
+  | { type: 'undo' }
+  /** "bring the board back (from the iPhone)": a board sent to a phone comes back. */
+  | { type: 'bringBack'; from?: 'ios' | 'android' };
+
+/** A spoken phone name → its platform ("the nothing phone", "my iphone"). */
+export function phoneFromWords(w: string): 'ios' | 'android' | null {
+  if (/\b(iphone|apple)\b/.test(w)) return 'ios';
+  if (/\b(nothing|android)\b/.test(w)) return 'android';
+  return null;
+}
 
 export function normalise(text: string): string {
   return text.toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9\s]/g, ' ')
@@ -40,6 +49,12 @@ export function parseCanvasCommand(text: string): CanvasCommand | null {
   if (/^(yes )?keep( (it|this|that|them))?$/.test(t)) return { type: 'keep' };
   if (/^((no )?drop( (it|this|that))?|reject( (it|this|that))?)$/.test(t)) return { type: 'drop' };
   if (/^undo( (it|this|that))?$/.test(t)) return { type: 'undo' };
+  // Not "pin"/"unpin" (those dock a board to the side).
+  const back = /^(bring|get|take) (the |my |that )?(status )?(board|dashboard|it) back( (from|to) (.*))?$/.exec(t);
+  if (back) {
+    const from = back[7] ? phoneFromWords(back[7]) : null;
+    return from ? { type: 'bringBack', from } : { type: 'bringBack' };
+  }
   const m = /^(go to|open|show me|jump to|take me to|switch to)\s+(the\s+)?(.+)$/.exec(t);
   if (m) return { type: 'goTo', target: m[3] };
   return null;

@@ -76,22 +76,23 @@ describe('a phone follows the laptop\'s pins', () => {
 
 describe('the laptop puts its pins on every board snapshot', () => {
   type Win = { __mcLastBoardSnapshot?: { board?: unknown; boardFor?: string; pins?: unknown; boardPin?: string } };
-  async function laptop(): Promise<CanvasHandle> {
+  async function laptop(saved: CanvasDoc[] = [], from?: CanvasDoc): Promise<CanvasHandle> {
     delete (window as Win).__mcLastBoardSnapshot;
     mm();
-    const doc = joinCanvasDoc(null, [sampleBoard('f1', { title: 'Desk' })]) as CanvasDoc;
+    const doc = from ?? joinCanvasDoc(null, [sampleBoard('f1', { title: 'Desk' }), sampleBoard('f2', { title: 'Notes' })]) as CanvasDoc;
     const root = document.createElement('div');
     document.body.append(root);
-    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, sim: true, connector: { run: async () => ({}) }, doc, artifactBy: () => 'gemini' });
+    handle = mountCanvas(root, { autoHands: false, reducedMotion: true, sim: true, connector: { run: async () => ({}) }, doc, artifactBy: () => 'gemini', onPersist: (d) => saved.push(d) });
     const h = handle;
     h.run('connect devices');
     await vi.waitFor(() => expect(h.edgeLayout().right).toBeTruthy(), { timeout: 18000 });
-    await h.focus('f1');
+    if (!from) await h.focus('f1');
     return h;
   }
 
   it('a send sets that phone\'s pin and stores it; a reloaded laptop still carries it', async () => {
-    let h = await laptop();
+    const saved: CanvasDoc[] = [];
+    let h = await laptop(saved);
     const right = h.edgeLayout().right!;
     expect(await h.sendBoard('right')).toBe(true);
     const snap = (window as Win).__mcLastBoardSnapshot!;
@@ -100,9 +101,13 @@ describe('the laptop puts its pins on every board snapshot', () => {
     expect(snap.boardPin).toBe('f1');
     expect(JSON.parse(localStorage.getItem(PINS_KEY) ?? 'null')).toEqual(snap.pins);
 
-    // Reload: the stored pin is read back; the next republish carries it.
+    // Reload from what the laptop saved: the stored pin is read back; the
+    // next republish carries it.
+    h.save();
+    await vi.waitFor(() => expect(saved.at(-1)?.frames.find((f) => f.id === 'f1')?.away).toBe(right), { timeout: 8000 });
     h.destroy(); handle = null;
-    h = await laptop();
+    h = await laptop([], saved.at(-1));
+    expect(h.frames().find((f) => f.id === 'f1')?.away).toBe(right);
     delete (window as Win).__mcLastBoardSnapshot;
     h.run('swap phone sides');
     await vi.waitFor(() => expect((window as Win).__mcLastBoardSnapshot).toBeTruthy());

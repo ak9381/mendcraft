@@ -37,6 +37,7 @@ function summarizeCanvasCmd(cmd: CanvasCommand): string {
     case 'step': return cmd.dir > 0 ? 'Next board' : 'Previous board';
     case 'pin': return cmd.on ? 'Pin this board' : 'Unpin this board';
     case 'goTo': return `Go to “${cmd.target}”`;
+    case 'bringBack': return cmd.from ? `Bring the board back from the ${cmd.from === 'ios' ? 'iPhone' : 'Nothing phone'}` : 'Bring the board back';
   }
 }
 

@@ -322,6 +322,11 @@ async function phones(page) {
   const snap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
   check(snap?.boardFor === right && snap?.boardBy === 'replay' && !!snap?.board, `the snapshot targets that phone and names the maker (got ${JSON.stringify({ boardFor: snap?.boardFor, boardBy: snap?.boardBy })})`);
   check(typeof snap?.boardSend?.id === 'string' && Number.isFinite(snap?.boardSend?.at), `a real send is stamped (got ${JSON.stringify(snap?.boardSend)})`);
+  // Send is a move: the board leaves the laptop, a chip names the phone, the pin is on the wire.
+  const sentId = await page.evaluate(() => window.__mcCanvas.frames().find((f) => f.away)?.id ?? null);
+  check(!!sentId && snap?.pins?.[right] === sentId && snap?.boardPin === sentId, `the snapshot pins the board on that phone (got ${JSON.stringify({ pins: snap?.pins, boardPin: snap?.boardPin })})`);
+  check(await page.evaluate((id) => !!document.querySelector(`[data-frame="${id}"]`)?.hidden, sentId), 'the sent board leaves the laptop');
+  check(await page.evaluate((n) => [...document.querySelectorAll('.mc-away-chip')].some((c) => c.textContent.includes(`on the ${n}`) && c.textContent.includes('Bring back')), name), `a chip says the board is on the ${name}, with Bring back`);
   if (!snap) return;
   const laptopControls = JSON.stringify(snap.board.tiles[0].children?.[0]?.controls ?? snap.board.tiles[0].controls ?? []);
 
@@ -391,6 +396,16 @@ async function phones(page) {
     await sleep(1200);
     const pinned = await boardArtifacts(target.p);
     check(pinned.length === 1 && pinned[0].v > again[0].v && pinned[0].data.frame.pinned && pinned[0].by === 'replay', `pinned after a reload: written again, still by replay (got ${JSON.stringify(pinned.map((a) => [a.v, a.data.frame.pinned, a.by]))})`);
+    // Bring it back on the laptop: the pin goes; the phone takes the board off, her own boards stay.
+    await page.evaluate(() => document.querySelector('.mc-away-chip button')?.click());
+    const backSnap = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
+    check(!!backSnap && backSnap.pins?.[right] === null && !backSnap.board, `brought back: the snapshot says the ${name} holds nothing (got ${JSON.stringify(backSnap?.pins)})`);
+    check(await page.evaluate((id) => !document.querySelector(`[data-frame="${id}"]`)?.hidden && !document.querySelector('.mc-away-chip'), sentId), 'brought back: the board is on the laptop again, the chip is gone');
+    await target.p.evaluate((s) => window.__mcGuestSnapshot(s), backSnap);
+    await waitFor(target.p, () => window.__mcCanvas.frames().length === 0, 5_000, 'the phone takes the brought-back board off')
+      .then((ok) => ok && check(true, `the ${name} takes the brought-back board off`));
+    await sleep(1200);
+    check((await boardArtifacts(target.p)).length === 0, 'the phone no longer keeps the brought-back board');
     check(target.errs.length === 0 && other.errs.length === 0, `no page errors on the phones${[...target.errs, ...other.errs].length ? `: ${[...target.errs, ...other.errs].slice(0, 3).join(' | ')}` : ''}`);
   } finally {
     await target.c.close();
@@ -965,6 +980,10 @@ async function phonelayout(page) {
     const mark = await iphone.p.evaluate(() => { try { return JSON.parse(localStorage.getItem('mc.canvas.v1') ?? 'null')?.frames?.map((f) => f.from ?? null); } catch { return null; } });
     check(JSON.stringify(mark) === '["laptop"]', `the phone saves the received mark with the board (got ${JSON.stringify(mark)})`);
 
+    // Send is a move: bring the board back from the iPhone, then send it to the Nothing phone.
+    await page.evaluate(() => window.__mcCanvas.run('bring the board back from the iphone'));
+    check(await page.evaluate((id) => !window.__mcCanvas.frames().find((f) => f.id === id)?.away, planFrame), 'the Floor plan board is brought back from the iPhone');
+    await page.evaluate((id) => window.__mcCanvas.focus(id), planFrame);
     check(await page.evaluate(() => window.__mcCanvas.sendBoard('android')), 'the Floor plan board is sent to the Nothing phone edge');
     const snapA = await page.evaluate(() => window.__mcLastBoardSnapshot ?? null);
     check(snapA?.boardFor === 'android' && docRooms(snapA).includes('Study'), 'the snapshot targets the Nothing phone with the edited drawing');

@@ -40,7 +40,7 @@ import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } f
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
 import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
-import { boardSendLine, coercePinIds, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout, PINS_KEY } from './edgeTransfer';
+import { boardSendLine, coercePinIds, PHONE_NAME, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout, PINS_KEY } from './edgeTransfer';
 import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } from './tileTransfer';
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
@@ -996,24 +996,108 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     restoreRect: (id, rect) => { reg.setRect(id, rect); sync(); persist(); },
     getBoard: (id) => surfaces[id] ?? null,
     onGlow: (g) => setEdgeGlow(g.side, g.glow, g),
-    onCommit: (s) => {
-      if (!opts.artifactBy?.(s.frameId)) { say(BOARD_NO_MAKER_SEND_LINE); return; }
-      // A real send is stamped (republishes are not), so the phone lights
-      // the arrived board once — never on a replay or a reload.
-      const stamp: BoardSendMark = { id: `${Date.now().toString(36)}-${(boardSends + 1).toString(36)}`, at: Date.now() };
-      if (hostSession || simWire) {
-        // Only the phone on that side shows it (boardFor); the other ignores it.
-        sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
-        savePins();
-        publishBoardTransfer(s.frameId, s.board, null, s.target, stamp);
-      }
-      const sentEl = frameById(s.frameId);
-      if (sentEl) flashSent(sentEl as unknown as GlowFrame);
-      boardSends++;
-      say(boardSendLine(s.target, s.board.title || reg.get(s.frameId)?.title || '', !!hostSession));
-    },
+    onCommit: (s) => { commitBoardSend(s.frameId, s.board, s.target); },
     now: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
   });
+  /** Boards sent by voice or gesture (no edge drag): the journey's 'shared' step too. */
+  const sentOtherwise = new Set<string>();
+  /**
+   * Send is a MOVE: the board goes to that phone (pinned there) and leaves
+   * the laptop — hidden here, with a "Bring back" chip — until it is brought
+   * back. Its surface stays, so republishes, live rows and controls pressed
+   * on the phone keep working. One path for the edge drag, voice and the
+   * four-finger send. Returns whether it was sent.
+   */
+  function commitBoardSend(frameId: string, board: SurfacePlan, target: PhonePlatform): boolean {
+    if (!opts.artifactBy?.(frameId)) { say(BOARD_NO_MAKER_SEND_LINE); return false; }
+    // A real send is stamped (republishes are not), so the phone lights
+    // the arrived board once — never on a replay or a reload.
+    const stamp: BoardSendMark = { id: `${Date.now().toString(36)}-${(boardSends + 1).toString(36)}`, at: Date.now() };
+    // The board that phone held until now comes back here (a phone holds one).
+    const prior = sentBoard.pinFor(target)?.frameId;
+    if (hostSession || simWire) {
+      // Only the phone on that side shows it (boardFor); the other ignores it.
+      sentBoard.remember({ boardFor: target, board, frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
+      savePins();
+      publishBoardTransfer(frameId, board, null, target, stamp);
+    }
+    if (prior && prior !== frameId) reg.markAway(prior, null);
+    const sentEl = frameById(frameId);
+    if (sentEl) flashSent(sentEl as unknown as GlowFrame);
+    boardSends++;
+    const title = board.title || reg.get(frameId)?.title || '';
+    reg.markAway(frameId, target);
+    if (focusId === frameId || lastFocus === frameId) {
+      const next = reg.list().find((f) => !f.away && f.id !== frameId);
+      if (lastFocus === frameId) lastFocus = next?.id ?? null;
+      if (focusId === frameId) {
+        if (next) void focus(next.id, { quiet: true }); else void overview({ quiet: true });
+      }
+    }
+    sync(); persist(); renderAwayChips();
+    say(boardSendLine(target, title, !!hostSession));
+    return true;
+  }
+  /** Bring a board back from the phone it was sent to: shown here again,
+   *  the pin taken off (the phone takes it off too), focused. */
+  function bringBoardBack(frameId: string): boolean {
+    const f = reg.get(frameId);
+    if (!f?.away) return false;
+    const from = f.away;
+    reg.markAway(frameId, null);
+    if (sentBoard.pinFor(from)?.frameId === frameId) sentBoard.clear(from);
+    savePins();
+    republishCurrentBoard();
+    sync(); persist(); renderAwayChips();
+    void focus(frameId, { quiet: true });
+    say(`Brought ${f.title} back from the ${PHONE_NAME[from]}.`);
+    return true;
+  }
+  /** "bring it back (from the iPhone)": the board on that phone, else the
+   *  one sent last. */
+  function bringBackByVoice(from?: PhonePlatform): void {
+    const away = reg.list().filter((f) => f.away && (!from || f.away === from));
+    if (!away.length) { say(from ? `No board is on the ${PHONE_NAME[from]}.` : 'No board is on a phone.'); return; }
+    const pinned = sentBoard.all().map((p) => p.frameId).filter((id): id is string => !!id && away.some((f) => f.id === id));
+    bringBoardBack(pinned.at(-1) ?? away[away.length - 1]!.id);
+  }
+  // One chip per board that is on a phone: "<title> · on the Nothing phone" + Bring back.
+  const awayBar = document.createElement('div');
+  awayBar.className = 'mc-away';
+  awayBar.setAttribute('aria-label', 'Boards on a phone');
+  awayBar.hidden = true;
+  if (!phoneShell) root.appendChild(awayBar);
+  function renderAwayChips(): void {
+    if (phoneShell) return;
+    const away = reg.list().filter((f) => f.away);
+    awayBar.replaceChildren(...away.map((f) => {
+      const chip = document.createElement('span');
+      chip.className = 'mc-away-chip';
+      chip.dataset.frame = f.id;
+      const label = document.createElement('span');
+      label.className = 'mc-away-label';
+      label.textContent = `${f.title} · on the ${PHONE_NAME[f.away!]}`;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mc-btn mc-away-back';
+      btn.dataset.act = 'bring-back';
+      btn.textContent = 'Bring back';
+      btn.setAttribute('aria-label', `Bring ${f.title} back from the ${PHONE_NAME[f.away!]}`);
+      btn.addEventListener('click', () => { bringBoardBack(f.id); });
+      chip.append(label, btn);
+      return chip;
+    }));
+    awayBar.hidden = away.length === 0;
+  }
+  // A board is away only while its phone holds it: a stored away mark and a
+  // stored pin must agree, else the board is simply here (never lost).
+  if (!phoneShell) {
+    const pinsNow = sentBoard.pins();
+    for (const f of reg.list()) if (f.away && pinsNow[f.away] !== f.id) reg.markAway(f.id, null);
+    for (const pin of sentBoard.all()) if (pin.frameId && reg.get(pin.frameId)?.away !== pin.boardFor) sentBoard.clear(pin.boardFor);
+    savePins();
+    renderAwayChips();
+  }
 
   // Screen-arrangement strip (set once, remembered): Left | This laptop | Right,
   // showing which phone is on which side. Only while a phone is paired AND
@@ -2192,8 +2276,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     blankEl.hidden = frames.length > 0;
     const ids = new Set(frames.map((f) => f.id));
     world.querySelectorAll<HTMLElement>('.mc-frame').forEach((el) => { if (!ids.has(el.dataset.frame!)) { live.delete(el.dataset.frame!); deviceSurfaces.untrack(el.dataset.frame!); el.remove(); } });
+    blankEl.hidden = frames.some((f) => !f.away);
     for (const f of frames) {
       const el = frameEl(f);
+      // A board sent to a phone is not on the laptop until it is brought back.
+      el.hidden = !!f.away;
+      if (f.away) el.dataset.away = f.away; else delete el.dataset.away;
       // The focused board may show narrower/shorter than its own size (see
       // fitBoardWidth); that fit is display-only, never stored.
       const fit = focusId === f.id ? focusFit.get(f.id) : undefined;
@@ -2596,7 +2684,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** `quiet`: the hint is not said (the boot report must stay on screen). */
   async function overview(o: { quiet?: boolean } = {}): Promise<void> {
     focusId = null; phoneOverview = phoneShell; sync(); clearDock();
-    const list = reg.list();
+    const list = reg.list().filter((f) => !f.away);
     // Leave the hand cluster's lane on the right free (it sits on the edge).
     const v = vp();
     await flyTo(fitRects(list.map((f) => f.rect), { w: Math.max(320, v.w - clusterInset()), h: v.h }, Math.max(56, barH())));
@@ -2648,7 +2736,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(msg, { speak: true });
   }
   function step(dir: 1 | -1): void {
-    const list = reg.list(); if (!list.length) return;
+    const list = reg.list().filter((f) => !f.away || f.id === (focusId ?? lastFocus)); if (!list.length) return;
     const i = Math.max(0, list.findIndex((f) => f.id === (focusId ?? lastFocus)));
     void focus(list[(i + dir + list.length) % list.length].id);
   }
@@ -6284,8 +6372,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           case 'save': save(); break;
           case 'back': if (focusId) void overview(); else if (lastFocus) void focus(lastFocus); break;
           case 'step': step(c.dir); break;
-          case 'goTo': { const id = resolveFrame(reg.list(), c.target); if (id) void focus(id); else say(`No board called “${c.target}”.`); break; }
+          case 'goTo': {
+            const id = resolveFrame(reg.list(), c.target);
+            const away = id ? reg.get(id)?.away : undefined;
+            if (id && away) say(`${reg.get(id)!.title} is on the ${PHONE_NAME[away]}. Say “bring it back”.`);
+            else if (id) void focus(id); else say(`No board called “${c.target}”.`);
+            break;
+          }
           case 'pin': { const id = focusId ?? lastFocus; if (id) { reg.setPinned(id, c.on); sync(); updateDock(); persist(); say(c.on ? 'Pinned. It docks beside the next board.' : 'Unpinned.'); } break; }
+          case 'bringBack': if (phoneShell) say('Bring a board back on the laptop.'); else bringBackByVoice(c.from); break;
           case 'buildNext': {
             const cur = focusId ?? lastFocus;
             if (cur && surfaces[cur]) reg.setPinned(cur, true);
@@ -7393,7 +7488,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
   return {
-    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, clearRemoteBoards, receivedBy, makerOf, isReceivedFrame: (frameId: string) => receivedFrames.has(frameId), sharedBoards: () => boardEdge.sharedBoards(), destroy,
+    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, clearRemoteBoards, receivedBy, makerOf, isReceivedFrame: (frameId: string) => receivedFrames.has(frameId), sharedBoards: () => new Set([...boardEdge.sharedBoards(), ...sentOtherwise]) as ReadonlySet<string>, destroy,
     /** Status lines said so far (a mark, then the lines said since it). */
     statusMark: () => statusBase + statusLog.length,
     /** Dev / test builds with ?sim=1 only: the gimbal relay messages a SIM run would have sent. */

@@ -1050,6 +1050,22 @@
 .mc-arrange-laptop { padding: 0.15rem 0.5rem; color: var(--text-dim, #777); }
 .mc-arrange-swap { min-height: 2.2rem; }
 
+/* A board sent to a phone left the laptop: one chip per board, with Bring back. */
+.mc-away {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 60px;
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; z-index: 41;
+  max-width: calc(100% - 32px);
+}
+.mc-away[hidden] { display: none; }
+.mc-away-chip {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.3rem 0.35rem 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  font-size: 0.9rem; color: var(--text);
+}
+.mc-away-back { min-height: 2.2rem; border-radius: 999px; }
+.mc-frame[data-away] { display: none; }
+
 /* Hand skeletons must paint ABOVE the tools bar (z 51) and the hand cluster
    (z 72). pointer-events stay none so pinches still hit the controls underneath. */
 .mc-canvas .hand-overlay {
@@ -1516,6 +1532,7 @@
    above it */
 .mc-canvas:has(.mc-engine-bar) .mc-swarm-pill { display: none; }
 .mc-canvas:has(.mc-engine-bar) .mc-arrange { bottom: 92px; }
+.mc-canvas:has(.mc-engine-bar) .mc-away { bottom: 140px; }
 /* The AI panel overlays the boards while a model works. Keep its foot above
    the engine bar and the corner face chip. */
 @media (min-width: 601px) {

@@ -10,6 +10,9 @@ export interface Frame {
   /** A phone: this board was received from the laptop (only these are ever
    *  treated as copies of one another — never her own boards). */
   from?: 'laptop';
+  /** The laptop: this board was sent (moved) to that phone and is hidden
+   *  here until it is brought back. */
+  away?: 'ios' | 'android';
 }
 export interface CanvasDoc {
   version: number; camera: Camera; focusId: string | null; frames: Frame[]; surfaces: Record<string, SurfacePlan>;
@@ -62,6 +65,8 @@ export function createFrameRegistry(initial: readonly Frame[] = [], reserved: It
     setKind(id: string, kind: FrameKind) { const f = find(id); if (f) f.kind = kind; },
     /** A phone: mark a board as received from the laptop. */
     markFromLaptop(id: string) { const f = find(id); if (f) f.from = 'laptop'; },
+    /** The laptop: the board is on that phone now (null: back here). */
+    markAway(id: string, p: 'ios' | 'android' | null) { const f = find(id); if (!f) return; if (p) f.away = p; else delete f.away; },
     remove(id: string) { const i = frames.findIndex((f) => f.id === id); if (i < 0) return false; frames.splice(i, 1); return true; },
     /** Put a closed board back as it was (Undo of "Close board"). */
     restore(f: Frame) { if (find(f.id) || frames.length >= MAX_FRAMES) return false; frames.push(copy(f)); return true; },
@@ -99,6 +104,7 @@ export function parseCanvasDocReport(raw: unknown): { doc: CanvasDoc | null; rep
     frames.push({
       id: f.id, kind: f.kind as FrameKind, title: cleanTitle(f.title), rect: { x: r.x, y: r.y, w: r.w, h: r.h }, pinned: f.pinned === true,
       ...(f.from === 'laptop' ? { from: 'laptop' as const } : {}),
+      ...(f.away === 'ios' || f.away === 'android' ? { away: f.away } : {}),
     });
   }
   const c = d.camera as Record<string, unknown> | undefined;
