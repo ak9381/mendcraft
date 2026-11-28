@@ -72,7 +72,7 @@ import { applyRealLamps, discoverRealLamps, fitLampTiles, isManagedLampId, manag
 import { answeringDevices, createDismissals, isHerChange, keepRoomDevices, keptRoomLine } from './roomRebuild';
 import { SPOTIFY_SPEAKER_ID, SPOTIFY_SPEAKER_LABEL, createSpotifyAwareConnector, isSpeakerDevice, playingLine, type MusicWhere } from './spotifyConnector';
 import * as spotifyApi from '../music/spotifyApi';
-import { getValidAccessToken, isNativeMusicShell, loadTokens } from '../music/spotifyAuth';
+import { getValidAccessToken, isNativeMusicShell, listenSpotifyAuthResult, loadTokens, startSpotifyConnect } from '../music/spotifyAuth';
 import { startWebPlayback, type SdkPlayer } from '../music/spotifySdk';
 import { createWizClient, resolveWizToken, type WizClient } from '../devices/wizClient';
 import { esc } from '../core/esc';
@@ -3700,6 +3700,41 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const line = said.join(' ') || 'Nothing new to add to your devices list.';
     panels.forEngine('nano').log('done', `devices list: ${line}`);
     say(line, { speak: true });
+    const speaker = tiles.find((t) => t.type === 'music');
+    if (speaker && !loadTokens() && !opts.sim) offerSpotify(listedSpeakerLabel() ?? 'speaker');
+  }
+  /** Right on the board: "Connect Spotify" for the speaker she just added.
+   *  The sign-in window needs a real click (Chrome blocks pop-ups otherwise);
+   *  a blocked window is said, never a page redirect that drops her phones. */
+  function offerSpotify(label: string): void {
+    if (!askCard) return;
+    askCard.showChoices(`Connect Spotify to play on the ${label}?`, ['Connect Spotify'], 'Later', (i) => {
+      askCard?.hide();
+      if (i !== 0) { say('Okay. You can connect Spotify later.'); return; }
+      let blocked = false;
+      const stop = listenSpotifyAuthResult((n) => {
+        if (n.ok) {
+          if (!store.get(SPOTIFY_SPEAKER_ID)) store.add(SPOTIFY_SPEAKER_ID, { cls: 'music', on: false, brightness: 0, playing: false, trackTitle: '', source: 'spotify', playingOn: '', sim: false });
+          DEVICE_LABELS[SPOTIFY_SPEAKER_ID] = label;
+          refreshLiveTables();
+          panels.forEngine('nano').log('done', `devices list: ${label} · Spotify connected`);
+          say(`Spotify connected. The ${label} is ready.`, { speak: true });
+        } else {
+          say('Spotify sign-in didn’t finish. Nothing changed.', { speak: true });
+        }
+      });
+      void startSpotifyConnect({ assign: () => { blocked = true; } }).then((r) => {
+        if (!r.ok) { stop(); say(r.error, { speak: true }); return; }
+        if (blocked || r.mode === 'redirect') {
+          stop();
+          say('Chrome blocked the Spotify window. Click Connect Spotify with the mouse.', { speak: true });
+          offerSpotify(label);
+          return;
+        }
+        say('Sign in to Spotify in the window that opened.');
+      });
+    });
+    say(`Connect Spotify to play on the ${label}?`);
   }
   async function connectTurn(frameId: string, utterance: string, turn: ConnectTurnResult, summary: string, status: ProposalStatus, o: { photoNote?: boolean; identified?: boolean; extraBytes?: number; prebookedBytes?: number; note?: string; swarm?: boolean } = {}): Promise<boolean> {
     if (turnBusy) return false; // a turn is already streaming/awaiting its review
