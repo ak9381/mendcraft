@@ -45,6 +45,7 @@ export function intentPrompt(text: string): string {
     'Actions:',
     ...INTENT_ACTIONS.map((a) => `- ${a.id}: ${a.describe}`),
     `- ${CHAT_INTENT}: a question, small talk, or anything that is none of the above`,
+    'A question about something (what is…, how does…) is chat, not an action.',
     'Reply with JSON only: {"intent": one id above, "confidence": 0 to 1}. Use chat when unsure what to do.',
     `She said: "${text.replace(/"/g, "'").slice(0, 300)}"`,
   ].join('\n');
@@ -83,6 +84,18 @@ export function decideIntent(p: IntentPick | null): IntentDecision {
   if (p.confidence >= RUN_AT) return { kind: 'run', action };
   if (p.confidence >= ASK_AT) return { kind: 'ask', action };
   return { kind: 'chat' };
+}
+
+/** Actions that send to the cloud ask first; so does a question ("what is a
+ *  gimbal?"), which is never taken as an order on its own. */
+const ASK_FIRST: ReadonlySet<string> = new Set(['floorPlan']);
+const QUESTION_RE = /^\s*(?:what|why|how|who|when|where|which)\b|\?\s*$/i;
+const REQUEST_RE = /^\s*(?:can|could|would|will)\s+you\b/i;
+export function askFirst(d: IntentDecision, text: string): IntentDecision {
+  if (d.kind !== 'run') return d;
+  if (ASK_FIRST.has(d.action.id)) return { kind: 'ask', action: d.action };
+  if (QUESTION_RE.test(text) && !REQUEST_RE.test(text)) return { kind: 'ask', action: d.action };
+  return d;
 }
 
 export const askLine = (a: IntentAction): string => `Did you mean: ${a.label}?`;

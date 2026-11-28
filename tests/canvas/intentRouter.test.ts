@@ -37,3 +37,17 @@ describe('intent router', () => {
     expect(ids).toEqual([...INTENT_ACTIONS.map((a) => a.id), 'chat']);
   });
 });
+
+import { askFirst } from '../../src/canvas/intentRouter';
+describe('ask first', () => {
+  const run = (id: string) => decideIntent({ intent: id, confidence: 0.95 });
+  it('a floor plan (cloud) always asks first', () => { expect(askFirst(run('floorPlan'), 'draw my flat').kind).toBe('ask'); });
+  it('a question is never an order on its own', () => {
+    expect(askFirst(run('connectGimbal'), 'what is a gimbal?').kind).toBe('ask');
+    expect(askFirst(run('connectGimbal'), 'how does the gimbal work').kind).toBe('ask');
+  });
+  it('a polite request still runs', () => {
+    expect(askFirst(run('showDevices'), "can you put everything I've connected on one screen?").kind).toBe('run');
+    expect(askFirst(run('showDevices'), 'build me about to keep track of my devices').kind).toBe('run');
+  });
+});

@@ -33,7 +33,7 @@ import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
 import { mountAskCard } from './askCard';
-import { askLine, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
+import { askFirst, askLine, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
 import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -5772,6 +5772,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let intentAsk: { action: IntentAction; text: string } | null = null;
   /** A line the intent router re-ran: it never goes back to the router. */
   let routingIntent = false;
+  /** Bumped by every line: a late Nano answer for an older line is dropped. */
+  let lineSeq = 0;
   function askAnswer(a: 'yes' | 'no'): void {
     if (gimbalAsk.active()) { gimbalAsk.handle(a); return; }
     if (intentAsk) answerIntent(a);
@@ -5781,7 +5783,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     try { run(phrase); } finally { routingIntent = false; }
   }
   function answerIntent(a: 'yes' | 'no'): void {
-    const q = intentAsk; if (!q) return;
+    const q = intentAsk; if (!q || gimbalAsk.active()) return;
     intentAsk = null; askCard?.hide();
     if (a === 'yes') { say(understoodLine(q.action)); runIntentPhrase(q.action.phrase(q.text)); }
     else { routingIntent = true; try { void openEndedTurn(q.text); } finally { routingIntent = false; } }
@@ -5796,15 +5798,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(INTENT_WORKING_LINE);
     const t0 = Date.now();
     const panel = panels.forEngine('nano');
+    const seq = lineSeq;
+    const stop = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
     let full = '';
     try {
       full = await Promise.race([
-        nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160 }),
-        new Promise<string>((res) => { setTimeout(() => res(''), INTENT_WAIT_MS); }),
+        nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160, signal: stop.signal }),
+        new Promise<string>((res) => { timer = setTimeout(() => { stop.abort(); res(''); }, INTENT_WAIT_MS); }),
       ]);
-    } catch { full = ''; }
+    } catch { full = ''; } finally { if (timer) clearTimeout(timer); }
+    // She moved on (another line, a question card, a review): this answer is stale.
+    if (seq !== lineSeq || gimbalAsk.active() || intentAsk || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
     const pick = parseIntent(full);
-    const d = decideIntent(pick);
+    const d = askFirst(decideIntent(pick), text);
     const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
     settleEngines();
     if (d.kind === 'run') {
@@ -5818,6 +5825,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       intentAsk = { action: d.action, text };
       askCard.show(askLine(d.action));
       say(askLine(d.action), { speak: true });
+      autoHideAi();
       return;
     }
     panel.log('done', pick ? `not an action → chat${conf}` : 'no clear action → chat');
@@ -5837,6 +5845,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
     speaker.stop();
+    if (!routingIntent) lineSeq++;
     // One sentence per Talk on the laptop: the mic closes once her words are
     // in, so narration around a command is never heard as another command.
     // (A question that wants an answer reopens it, e.g. the gimbal ask.)
@@ -5848,6 +5857,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.
+    // "Did you mean …?": her yes / no answers it; nothing else runs meanwhile.
+    if (intentAsk) {
+      if (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i.test(text)) { answerIntent('yes'); return true; }
+      if (/^\s*(?:no|nope|nah|cancel|never\s*mind|wrong)\b/i.test(text)) { answerIntent('no'); return true; }
+      say('Answer the question first: yes or no.', { speak: true }); return true;
+    }
     if (morphFlow?.handleSpeech(text)) return true;
     // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
     if (pairFirst.handleSpeech(text)) return true;
@@ -5855,12 +5870,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (gimbalAsk.handle(text)) return true;
     // The question card is modal: nothing else runs until it is answered.
     if (gimbalAsk.active()) { say('Answer the question first: yes or no.', { speak: true }); return true; }
-    // "Did you mean …?": her yes / no answers it; nothing else runs meanwhile.
-    if (intentAsk) {
-      if (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i.test(text)) { answerIntent('yes'); return true; }
-      if (/^\s*(?:no|nope|nah|cancel|never\s*mind|wrong)\b/i.test(text)) { answerIntent('no'); return true; }
-      say('Answer the question first: yes or no.', { speak: true }); return true;
-    }
     // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
