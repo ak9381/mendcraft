@@ -40,3 +40,19 @@ describe('more mishearings of "build me a board"', () => {
     ]) expect(routeLine(t, w).name, t).toBe('showDevices');
   });
 });
+
+import { isBuildDashboard } from '../../src/canvas/pairedRow';
+import { wantsStatusBoard } from '../../src/canvas/routeLine';
+describe('what it is FOR decides the board, not the word', () => {
+  it('"a dashboard to keep track of my devices and their status" is the status board', () => {
+    const t = 'build me a dashboard to keep track of all my devices and their status and to point and connect another if needed';
+    expect(wantsStatusBoard(t)).toBe(true);
+    expect(routeLine(t, w).name).toBe('showDevices');
+    expect(isBuildDashboard(t)).toBe(true); // the word is there; the pair flow checks wantsStatusBoard too
+  });
+  it('a dashboard to control things stays the dashboard', () => {
+    for (const t of ['build the dashboard', 'build me a dashboard to control my lamp and speaker', 'make a dashboard with buttons to turn on my devices'])
+      expect(wantsStatusBoard(t), t).toBe(false);
+    expect(routeLine('build the dashboard', w).name).toBe('connectRoom');
+  });
+});

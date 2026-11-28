@@ -128,10 +128,19 @@ const DEVICES_WHY_RE = /\b(?:track|status|statuses|connected|overview|monitor|se
 export const fixBoard = (t: string): string => t
   .replace(/^\s*(?:belt|bolt|built|bill|felt|bell)\s+me\b/i, 'build me')
   .replace(/\b(build|make|create|give|set\s+up)(\s+me)?\s+(?:about|a\s*bout|a\s+bored|a\s+bord|a\s+boat|a\s+bird|a\s+bold|abort|aboard)\b/gi, '$1$2 a board');
+// What she wants it FOR decides the board, not the word she used for it:
+// "a dashboard to keep track of my devices and their status" is the status board.
+const STATUS_WORDS_RE = /\b(?:status|statuses|keep\s+track|track\s+of|what(?:'|’)?s\s+(?:on|connected)|(?:are|is)\s+(?:connected|working|online))\b/i;
+const CONTROL_WORDS_RE = /\b(?:control|controls|turn\s+(?:on|off)|switch(?:es)?|dim|brighten|brightness|volume|play|pause|sliders?|buttons?\s+(?:to|for)\s+(?:turn|switch|dim|play))\b/i;
+export const wantsStatusBoard = (raw: string): boolean => {
+  const text = fixBoard(raw);
+  return STATUS_WORDS_RE.test(text) && /\bdevices?\b/i.test(text) && !CONTROL_WORDS_RE.test(text);
+};
 export const isShowDevices = (raw: string): boolean => {
   const text = fixBoard(raw);
-  return SHOW_DEVICES_RE.test(text)
-    || (!/\bdash\s*-?board\b/i.test(text) && ((DEVICES_BOARD_RE.test(text) && DEVICES_WHY_RE.test(text)) || DEVICES_SEE_RE.test(text)));
+  if (SHOW_DEVICES_RE.test(text) || DEVICES_SEE_RE.test(text)) return true;
+  if (/\bdash\s*-?board\b/i.test(text)) return wantsStatusBoard(text);
+  return DEVICES_BOARD_RE.test(text) && DEVICES_WHY_RE.test(text);
 };
 export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);

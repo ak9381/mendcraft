@@ -5,6 +5,7 @@
 // canvas supplies the effects.
 
 import { esc } from '../core/esc';
+import { wantsStatusBoard } from './routeLine';
 
 export interface PairedPhone {
   id: string;
@@ -173,7 +174,8 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
     continueNext,
     handleSpeech(text) {
       if (phase !== 'pairing' && phase !== 'asking') return false;
-      if (isBuildDashboard(text)) { buildNow(); return true; }
+      // "a dashboard to keep track of my devices' status" is the status board: not this.
+      if (isBuildDashboard(text) && !wantsStatusBoard(text)) { buildNow(); return true; }
       if (phase === 'pairing') return isContinue(text) && list.length > 0 ? continueNext() : false;
       // asking: point / name / connect stay in the flow; anything else ends it.
       if (/\b(point|connect|add|name)\b/i.test(text)) return false;
