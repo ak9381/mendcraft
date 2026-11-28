@@ -304,9 +304,13 @@ export function createSentBoardMemo(): SentBoardMemo {
   return {
     remember(sent, focusId, focusPlan) { last = { ...sent, focusId, focusPlan }; },
     current(focusId, focusPlan) {
-      if (last && last.focusId === focusId && last.focusPlan === focusPlan) return { board: last.board, boardFor: last.boardFor, frameId: last.frameId ?? focusId };
-      last = null;
-      return { board: focusPlan, frameId: focusId };
+      // Extend, never mirror: a phone shows a board only after she sends one
+      // there (drag to its edge / "send to"), and that board stays pinned on
+      // that phone while she works on other boards here, until she sends
+      // another. Nothing sent: no board goes.
+      void focusPlan;
+      if (last) return { board: last.board, boardFor: last.boardFor, frameId: last.frameId ?? last.focusId ?? focusId };
+      return { board: null, frameId: focusId };
     },
   };
 }

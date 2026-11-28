@@ -248,26 +248,25 @@ describe('pairedEdgeLayout', () => {
 
 describe('createSentBoardMemo', () => {
   const focus = { kind: 'room', title: 'Focus', tiles: [] } as unknown as SurfacePlan;
-  it('routine republishes keep the sent board (with its target) until the focus changes', () => {
+  it('extend, never mirror: nothing goes until she sends a board; the sent board stays pinned to its phone', () => {
     const m = createSentBoardMemo();
-    expect(m.current('f1', focus)).toEqual({ board: focus, frameId: 'f1' });
-    m.remember({ boardFor: 'ios', board: BOARD }, 'f1', focus);
-    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f1' });
-    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f1' });
-    // The focused board was edited (new plan object) → mirror the focus again, for good.
+    expect(m.current('f1', focus)).toEqual({ board: null, frameId: 'f1' });
+    m.remember({ boardFor: 'android', board: BOARD }, 'f1', focus);
+    expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
+    // She edits or moves to another board here: the phone keeps the one she pinned.
     const edited = { ...focus } as SurfacePlan;
-    expect(m.current('f1', edited)).toEqual({ board: edited, frameId: 'f1' });
-    expect(m.current('f1', focus)).toEqual({ board: focus, frameId: 'f1' });
+    expect(m.current('f1', edited)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
+    expect(m.current('f2', null)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
   });
   it('remembers which board the sent plan came from (its drawings ride along)', () => {
     const m = createSentBoardMemo();
     m.remember({ boardFor: 'ios', board: BOARD, frameId: 'f9' }, 'f1', focus);
     expect(m.current('f1', focus)).toEqual({ board: BOARD, boardFor: 'ios', frameId: 'f9' });
   });
-  it('focusing another board ends the memo', () => {
+  it('focusing another board keeps the pinned one on its phone', () => {
     const m = createSentBoardMemo();
     m.remember({ boardFor: 'android', board: BOARD }, 'f1', focus);
-    expect(m.current('f2', null)).toEqual({ board: null, frameId: 'f2' });
+    expect(m.current('f2', null)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
   });
 });
 
