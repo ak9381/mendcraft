@@ -111,6 +111,8 @@ const ADD_TO_BOARD_RE = /\badd\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;
 /** "add the gimbal", "add gimbal controls", "show the gimbal tile", "gimbal controls". */
 const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?gimbal(?:\s+(?:controls?|tile|buttons?))?(?:\s+(?:here|(?:on|to)\s+(?:the|this|my)\s+(?:board|dashboard)))?|(?:the\s+)?gimbal\s+controls?)(?:\s+please)?\s*[.!?]*\s*$/i;
+/** "add the gimbal": the canvas asks two questions before the board turn. */
+export function isAddGimbalAsk(text: string): boolean { return ADD_GIMBAL_RE.test(text); }
 /** "show my devices", "list the connected devices", "what's connected?". */
 const SHOW_DEVICES_RE = /^\s*(?:please\s+)?(?:(?:show|list)\s+(?:me\s+)?(?:all\s+)?(?:(?:my|the|our)\s+)?(?:connected\s+)?devices|what(?:'|’)?s\s+connected|what\s+is\s+connected)(?:\s+please)?\s*[.!?]*\s*$/i;
 export const isShowDevices = (text: string): boolean => SHOW_DEVICES_RE.test(text);

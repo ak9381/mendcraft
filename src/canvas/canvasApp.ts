@@ -31,6 +31,7 @@ import { cleanReply, createSentenceFeed } from './liveReply';
 import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt } from './tryToBreak';
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
+import { createGimbalAsk } from './gimbalAsk';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -142,7 +143,7 @@ import { coerceNextSteps, createNextStepChips, planExtraRan, plainStep, STEPS_CO
 import { extractJson } from '../ai/cloudJson';
 import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from './devicesTurn';
-import { routeLine, type RouteWorld } from './routeLine';
+import { isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
@@ -5724,6 +5725,17 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (Math.abs(camera.y - was) < 0.5 && tallRoomEl()) { say(dir === 'down' ? "That's the end of the board." : "That's the top of the board."); return; }
     applyCamera(); persist();
   }
+  function connectRoomOnDashboard(text: string): void {
+    // The dashboard is its own board: never the devices list or the floor plan.
+    const target = dashboardTarget(focusId);
+    if (focusId !== target) { sync(); void focus(target); }
+    void connectRoom(target, text);
+  }
+  const gimbalAsk = createGimbalAsk({
+    say: (line) => say(line, { speak: true }),
+    standReported: () => standReported(),
+    proceed: (t) => connectRoomOnDashboard(t),
+  });
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
     speaker.stop();
@@ -5734,6 +5746,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (morphFlow?.handleSpeech(text)) return true;
     // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
     if (pairFirst.handleSpeech(text)) return true;
+    // "Is the gimbal switched on?" / "Put the iPhone on the gimbal": her yes answers it.
+    if (gimbalAsk.handle(text)) return true;
     // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
@@ -5883,10 +5897,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       }
       case 'showDevices': void devicesTurn(text); return true;
       case 'connectRoom': {
-        // The dashboard is its own board: never the devices list or the floor plan.
-        const target = dashboardTarget(focusId);
-        if (focusId !== target) { sync(); void focus(target); }
-        void connectRoom(target, text); return true;
+        // "add the gimbal" with the iPhone paired: two questions first (is it
+        // on, is the iPhone on it); the second yes is checked against the stand.
+        if (isAddGimbalAsk(text) && iphonePaired()) { gimbalAsk.start(text); return true; }
+        connectRoomOnDashboard(text); return true;
       }
       // "floor plan for Mrs Sharma's flat" / "a floor plan" / "floorplan" —
       // route to the Nano floor-plan turn with the full utterance so any name
