@@ -1257,6 +1257,24 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const readAloudLines = createReadAloud({ speaker, enabled: () => readAloud, packLang: () => pack?.lang });
   /** `speak`: true reads this line aloud; a string reads that instead. */
   type SayOptions = { speak?: boolean | string };
+  /** "Done. Say something else.": once a turn has really finished and
+   *  nothing waits on her (no review, question, point, pairing, model or mic). */
+  const DONE_CUE = 'Done. Say something else.';
+  const SPEECH_NEEDS_CLICK = 'Click anywhere once to turn on spoken replies.';
+  let speechHintSaid = false;
+  let doneTimer: ReturnType<typeof setTimeout> | null = null;
+  let intentBusy = false;
+  function scheduleDoneCue(): void {
+    if (typeof window === 'undefined') return;
+    if (doneTimer) clearTimeout(doneTimer);
+    doneTimer = setTimeout(() => {
+      doneTimer = null;
+      const waiting = turnBusy || intentBusy || streamsOut > 0 || reviewBusy() || gimbalAsk.active() || !!intentAsk
+        || !!pointWait || !!iphonePoint || pairFirst.phase() === 'pairing' || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
+      if (waiting) { scheduleDoneCue(); return; }
+      say(DONE_CUE, { speak: true });
+    }, 2500);
+  }
   const say = (t: string, o: SayOptions = {}) => {
     statusEl.textContent = t; hideRetry();
     showPhoneSay(t === LISTENING_STATUS ? '' : t);
@@ -1266,6 +1284,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     statusLog.push(t);
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
+    // Chrome plays speech only after a real click on this page since it
+    // loaded: say so once, instead of staying silent.
+    if (o.speak && readAloud && !speechHintSaid && typeof navigator !== 'undefined'
+      && (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) {
+      speechHintSaid = true;
+      setTimeout(() => { statusEl.textContent = SPEECH_NEEDS_CLICK; fadeStatus(SPEECH_NEEDS_CLICK); }, 1800);
+    }
+    if (t && t !== DONE_CUE && t !== LISTENING_STATUS && !phoneShell) scheduleDoneCue();
     if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };
 
@@ -5795,6 +5821,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!nano || nano.id !== 'nano' || nano.sim || reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
     const si: SentInfo = { engine: 'nano', prompt: intentPrompt(fixBoard(text)), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
     aiSent(text, si, { task: 'generic', swarm: false });
+    intentBusy = true;
     say(INTENT_WORKING_LINE);
     const t0 = Date.now();
     const panel = panels.forEngine('nano');
@@ -5807,7 +5834,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160, signal: stop.signal }),
         new Promise<string>((res) => { timer = setTimeout(() => { stop.abort(); res(''); }, INTENT_WAIT_MS); }),
       ]);
-    } catch { full = ''; } finally { if (timer) clearTimeout(timer); }
+    } catch { full = ''; } finally { if (timer) clearTimeout(timer); intentBusy = false; }
     // She moved on (another line, a question card, a review): this answer is stale.
     if (seq !== lineSeq || gimbalAsk.active() || intentAsk || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
     const pick = parseIntent(full);
