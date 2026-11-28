@@ -33,6 +33,7 @@ import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
 import { mountAskCard } from './askCard';
+import { askLine, decideIntent, INTENT_CONSTRAINT, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
 import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -5765,8 +5766,62 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     void connectRoom(target, text);
   }
   const askCard = typeof document !== 'undefined' && !phoneShell
-    ? mountAskCard(root, { yes: () => { gimbalAsk.handle('yes'); }, no: () => { gimbalAsk.handle('no'); } })
+    ? mountAskCard(root, { yes: () => { askAnswer('yes'); }, no: () => { askAnswer('no'); } })
     : null;
+  /** "Did you mean …?" from the intent router, waiting for her yes / no. */
+  let intentAsk: { action: IntentAction; text: string } | null = null;
+  /** A line the intent router re-ran: it never goes back to the router. */
+  let routingIntent = false;
+  function askAnswer(a: 'yes' | 'no'): void {
+    if (gimbalAsk.active()) { gimbalAsk.handle(a); return; }
+    if (intentAsk) answerIntent(a);
+  }
+  function runIntentPhrase(phrase: string): void {
+    routingIntent = true;
+    try { run(phrase); } finally { routingIntent = false; }
+  }
+  function answerIntent(a: 'yes' | 'no'): void {
+    const q = intentAsk; if (!q) return;
+    intentAsk = null; askCard?.hide();
+    if (a === 'yes') { say(understoodLine(q.action)); runIntentPhrase(q.action.phrase(q.text)); }
+    else { routingIntent = true; try { void openEndedTurn(q.text); } finally { routingIntent = false; } }
+  }
+  /** No fixed phrase matched: Nano (on this laptop) picks one action from a
+   *  closed list, or chat. Code runs it like her fixed phrase; unsure → ask. */
+  async function intentTurn(text: string): Promise<void> {
+    const nano = engineFor('nano', 'ask');
+    if (!nano || nano.id !== 'nano' || nano.sim || reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
+    const si: SentInfo = { engine: 'nano', prompt: intentPrompt(text), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
+    aiSent(text, si, { task: 'generic', swarm: false });
+    const panel = panels.forEngine('nano');
+    let full = '';
+    try {
+      full = await Promise.race([
+        nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160 }),
+        new Promise<string>((res) => { setTimeout(() => res(''), 8000); }),
+      ]);
+    } catch { full = ''; }
+    const pick = parseIntent(full);
+    const d = decideIntent(pick);
+    const conf = pick ? ` (${Math.round(pick.confidence * 100)}%)` : '';
+    settleEngines();
+    if (d.kind === 'run') {
+      panel.log('done', `understood: ${d.action.label}${conf}`);
+      say(understoodLine(d.action));
+      runIntentPhrase(d.action.phrase(text));
+      return;
+    }
+    if (d.kind === 'ask' && askCard) {
+      panel.log('done', `not sure: ${d.action.label}?${conf}`);
+      intentAsk = { action: d.action, text };
+      askCard.show(askLine(d.action));
+      say(askLine(d.action), { speak: true });
+      return;
+    }
+    panel.log('done', pick ? `not an action → chat${conf}` : 'no clear action → chat');
+    routingIntent = true;
+    try { void openEndedTurn(text); } finally { routingIntent = false; }
+  }
   const gimbalAsk = createGimbalAsk({
     say: (line) => say(line, { speak: true }),
     standReported: () => standReported(),
@@ -5798,6 +5853,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (gimbalAsk.handle(text)) return true;
     // The question card is modal: nothing else runs until it is answered.
     if (gimbalAsk.active()) { say('Answer the question first: yes or no.', { speak: true }); return true; }
+    // "Did you mean …?": her yes / no answers it; nothing else runs meanwhile.
+    if (intentAsk) {
+      if (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i.test(text)) { answerIntent('yes'); return true; }
+      if (/^\s*(?:no|nope|nah|cancel|never\s*mind|wrong)\b/i.test(text)) { answerIntent('no'); return true; }
+      say('Answer the question first: yes or no.', { speak: true }); return true;
+    }
     // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
@@ -5976,7 +6037,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         break;
       }
     }
-    void openEndedTurn(text);
+    // Before chat (which only talks): let Nano pick the action she meant.
+    if (routingIntent) void openEndedTurn(text); else void intentTurn(text);
     return true;
   }
 

@@ -13,9 +13,13 @@ describe('canvasApp.run() open-ended fallback', () => {
     expect(src).not.toContain("isn't a canvas command yet");
   });
 
-  it('run() hands anything unmatched to openEndedTurn, not a dead end', () => {
+  it('run() hands anything unmatched to the intent router, then openEndedTurn — never a dead end', () => {
     const body = src.slice(src.indexOf('function run(text: string): boolean {'), src.indexOf('// ---- input ----'));
-    expect(body).toMatch(/void openEndedTurn\(text\);\s*\n\s*return true;\s*\n\s*}\s*$/);
+    expect(body).toMatch(/if \(routingIntent\) void openEndedTurn\(text\); else void intentTurn\(text\);\s*\n\s*return true;\s*\n\s*}\s*$/);
+    // the router always ends in an action, a yes/no question, or chat
+    const router = src.slice(src.indexOf('async function intentTurn('), src.indexOf('const gimbalAsk = createGimbalAsk({'));
+    expect(router).toContain('void openEndedTurn(text)');
+    expect(router).toContain("constraint: INTENT_CONSTRAINT");
   });
 
   it('openEndedTurn tries Nano then Gemini and reports on the matching panel', () => {
