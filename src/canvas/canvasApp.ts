@@ -1749,7 +1749,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // A board's lamp tile whose bulb missed the last look ("Not connected")
   // counts too: it is looked for again, so the tile is live when it answers.
   const anyLampUnreachable = (): boolean => Object.entries(store.all()).some(([id, d]) => isWizDevice(id) && (d.unreachable || (!bridgeStatus.up && d.sim)))
-    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));
+    || Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)))
+    // The bridge is up but its one broadcast found no bulb (a WiZ bulb misses
+    // one now and then): keep looking, or a lamp on the network is never seen.
+    || (bridgeStatus.up && lampsLookedFor && !Object.keys(store.all()).some((id) => isManagedLampId(id)));
   if (wizClient && !opts.connector && liveLamps && typeof window !== 'undefined') {
     const t = setInterval(() => { if (!bridgeStatus.up || anyLampUnreachable()) void rediscoverLamps(); }, REDISCOVER_MS);
     addEventListener('pagehide', () => clearInterval(t), { once: true });
@@ -3942,7 +3945,13 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const where = r ? (r.source === 'cloud' ? 'Gemini · cloud' : 'Nano · on device') : null;
     // Live: a smart bulb is one of HER real lamps — when one is reachable it is
     // proposed (normal review); when none is, say why (Chrome, or not yet).
-    const realLamps = liveLamps ? Object.entries(store.all()).filter(([id, d]) => isManagedLampId(id) && !d.unreachable && !d.sim).map(([id]) => id) : undefined;
+    const reachableLamps = (): string[] => Object.entries(store.all()).filter(([id, d]) => isManagedLampId(id) && !d.unreachable && !d.sim).map(([id]) => id);
+    // A bulb was seen but no lamp is known: look on the network once more
+    // before saying it can't be reached (the boot broadcast may have missed it).
+    if (liveLamps && wizClient && !opts.connector && r?.identity.kind === 'smart-bulb' && !reachableLamps().length && !discovering) {
+      await discoverLamps(true).catch(() => undefined);
+    }
+    const realLamps = liveLamps ? reachableLamps() : undefined;
     if (realLamps && r?.identity.kind === 'smart-bulb' && r.identity.confidence >= POINT_MIN_CONFIDENCE && !o.chosenId && !realLamps.length) {
       ledgerPointFailure(r, o, null);
       say((await lna.line()) || BULB_UNREACHABLE_LINE, { speak: true });

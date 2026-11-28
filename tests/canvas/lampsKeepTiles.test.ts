@@ -63,7 +63,9 @@ describe('I3: discovery never removes lamp tiles', () => {
 
   it('a "Not connected" lamp tile keeps the 30 s re-discovery going, so the tile is live again when the bulb answers', () => {
     const app = readFileSync(new URL('../../src/canvas/canvasApp.ts', import.meta.url), 'utf8');
-    expect(app).toContain('|| Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)));');
+    expect(app).toContain('|| Object.values(surfaces).some((p) => [...managedLampIdsOn(p)].some((id) => !store.get(id)))');
+    // A missed boot broadcast (bridge up, no lamp found) keeps looking too.
+    expect(app).toContain('|| (bridgeStatus.up && lampsLookedFor && !Object.keys(store.all()).some((id) => isManagedLampId(id)));');
     expect(app).toContain('} else if (r.deviceId && isManagedLampId(r.deviceId) && liveLamps) void rediscoverLamps();');
   });
 });
