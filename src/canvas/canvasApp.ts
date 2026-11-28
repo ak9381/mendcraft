@@ -40,6 +40,8 @@ import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } f
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
 import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
+import { classifyHandShape, stampedShape } from './handShape';
+import { createFourSend, palmX, type FourSide } from './fourSend';
 import { boardSendLine, coercePinIds, PHONE_NAME, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout, PINS_KEY } from './edgeTransfer';
 import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } from './tileTransfer';
 import { createAskOrigins } from './askOrigin';
@@ -4958,6 +4960,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         // delta scales by 1/camera.z. Persisted on 'end'.
         // Held at a paired phone's edge, the board is sent there (boardEdge).
         onBoardMove: (ev) => {
+          // Sent by four fingers mid-drag: the rest of this drag does nothing.
+          if (fourSentFrame === ev.frameId) { if (ev.phase === 'end' || ev.phase === 'cancel') { fourSentFrame = null; persist(); } return; }
           const at = { frameId: ev.frameId, clientX: ev.x ?? NaN, clientY: ev.y ?? NaN };
           if (ev.phase === 'start') {
             const f0 = reg.get(ev.frameId);
@@ -5166,6 +5170,43 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   }
   function onHandFrame(hands: readonly (readonly CropPt[])[], now: number): void {
     handRouter.frame(hands, now);
+    fourSendFrame(hands, now);
+  }
+  // Four-finger send (fourSend.ts): four fingers up, thumb in, held, then
+  // swept toward a paired phone's side — the board being fist-dragged by the
+  // other hand, else the focused board, goes there (the same move as the
+  // edge hold). Laptop, Hands on, not locked, no review open.
+  const fourSend = createFourSend();
+  /** The board a four-finger send took out of a fist drag: its remaining
+   *  drag events are ignored until the fist opens. */
+  let fourSentFrame: string | null = null;
+  function fourSendFrame(hands: readonly (readonly CropPt[])[], now: number): void {
+    if (phoneShell || !gestures?.isActive() || handRouter.locked() || reviewBusy()) { fourSend.reset(); return; }
+    const reads = hands.filter((h) => h && h.length >= 21).map((h) => ({
+      four: stampedShape(h) === 'open' && classifyHandShape(h, (h as { label?: string }).label, handRouter.faceX(), { mirrored: true, cameraAspect: handCameraAspect }).four === true,
+      x: palmX(h),
+    }));
+    const side = fourSend.update(reads, now);
+    if (side) fourSendFire(side);
+  }
+  function fourSendFire(side: FourSide): void {
+    const dragging = handBoardFrom?.frameId ?? null;
+    const id = dragging ?? focusId ?? lastFocus;
+    const r = sendSide(side);
+    if ('why' in r) { say(r.why); return; }
+    if (!id || !surfaces[id] || reg.get(id)?.away) { say('Open a board first, then send it.'); return; }
+    if (dragging && handBoardFrom) {
+      // The fist drag ends here: the board goes back to where it began, then leaves.
+      const from = handBoardFrom; handBoardFrom = null;
+      boardEdge.handleBoardDrag({ frameId: dragging, phase: 'cancel', clientX: NaN, clientY: NaN });
+      const f = reg.get(dragging);
+      if (f) reg.setRect(dragging, { ...f.rect, x: from.x, y: from.y });
+      fourSentFrame = dragging;
+    }
+    // The edge on that side flashes as the board goes.
+    setEdgeGlow(r.side, 1);
+    setTimeout(() => setEdgeGlow(null, 0), 450);
+    if (commitBoardSend(id, surfaces[id]!, edgeLayout()[r.side]!)) sentOtherwise.add(id);
   }
 
   // Phone shell: hand control from the shared front camera (phoneHands.ts) —

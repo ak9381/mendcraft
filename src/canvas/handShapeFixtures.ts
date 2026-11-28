@@ -62,9 +62,11 @@ function thumb(mode: ThumbMode, depth: boolean): P3[] {
 }
 
 /** Local landmarks for a shape (before rotation / placement). */
-function localHand(shape: HandShape | 'relaxed' | 'pointCamera', depth: boolean): { pts: P3[]; rotate: number } {
+function localHand(shape: HandShape | 'relaxed' | 'pointCamera' | 'four', depth: boolean): { pts: P3[]; rotate: number } {
   const modes: Record<string, { f: ('ext' | 'curl' | 'camera')[]; t: ThumbMode; rotate: number }> = {
     open: { f: ['ext', 'ext', 'ext', 'ext'], t: 'side', rotate: 0 },
+    // Four fingers up, thumb folded across the palm: the four-finger send.
+    four: { f: ['ext', 'ext', 'ext', 'ext'], t: 'tucked', rotate: 0 },
     fist: { f: ['curl', 'curl', 'curl', 'curl'], t: 'tucked', rotate: 0 },
     one: { f: ['ext', 'curl', 'curl', 'curl'], t: 'tucked', rotate: 0 },
     peace: { f: ['ext', 'ext', 'curl', 'curl'], t: 'tucked', rotate: 0 },
@@ -96,7 +98,7 @@ function MCP_Z(depth: boolean): { z?: number } { return depth ? { z: 0 } : {}; }
 
 /** 21 landmarks (selfie space) for `shape` on the given hand. */
 export function syntheticHand(
-  shape: HandShape | 'relaxed' | 'pointCamera',
+  shape: HandShape | 'relaxed' | 'pointCamera' | 'four',
   side: HandSide,
   opts: SyntheticHandOptions = {},
 ): P3[] & { label?: string } {

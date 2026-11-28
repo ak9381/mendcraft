@@ -29,6 +29,9 @@ export interface HandShapeResult {
   confidence: number;
   /** Where the L/R call came from. */
   handFrom: 'face' | 'label' | 'position';
+  /** Four fingers extended with the thumb folded in (still shape 'open', so
+   *  the pointer and the gesture table are unchanged): the four-finger send. */
+  four?: boolean;
 }
 
 type Pt3 = Pt & { z?: number };
@@ -116,11 +119,11 @@ export function classifyHandShape(
   opts: ShapeOptions = {},
 ): HandShapeResult {
   const label = handedness ?? (landmarks as { label?: string }).label;
-  if (!landmarks || landmarks.length < 21) return { shape: 'other', hand: 'R', confidence: 0, handFrom: 'position' };
+  if (!landmarks || landmarks.length < 21) return { shape: 'other', hand: 'R', confidence: 0, handFrom: 'position', four: false };
   const side = resolveHandSide(landmarks, label, faceX, opts);
   const handConf = side.from === 'face' ? 1 : side.from === 'label' ? 0.85 : 0.5;
-  const out = (shape: HandShape, conf: number): HandShapeResult => ({
-    shape, hand: side.hand, confidence: shape === 'other' ? 0 : clamp01(conf) * handConf, handFrom: side.from,
+  const out = (shape: HandShape, conf: number, four = false): HandShapeResult => ({
+    shape, hand: side.hand, confidence: shape === 'other' ? 0 : clamp01(conf) * handConf, handFrom: side.from, four,
   });
 
   const cfg: Parameters<typeof fingerStates>[1] = { ...(HAND_FEEL as HandFeelConfig), cameraAspect: opts.cameraAspect ?? HAND_FEEL.cameraAspect };
@@ -157,7 +160,7 @@ export function classifyHandShape(
   }
   if (pattern([true, true, false, false])) return allVisible(2) ? out('peace', 1) : out('other', 0);
   if (pattern([true, true, true, false])) return allVisible(3) ? out('three', 1) : out('other', 0);
-  if (ext.every(Boolean)) return out('open', 1);
+  if (ext.every(Boolean)) return out('open', 1, allVisible(4) && !thumbInfo(landmarks).extended);
   return out('other', 0);
 }
 

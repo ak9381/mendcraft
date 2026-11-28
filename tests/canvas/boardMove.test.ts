@@ -130,6 +130,22 @@ describe('voice send', () => {
   }, 45000);
 });
 
+describe('four-finger send on the canvas', () => {
+  it('four fingers held then swept toward the right phone sends the focused board there', async () => {
+    const h = await laptop();
+    type G = { show(on: boolean): void; hand(shape: string, side: 'L' | 'R', o?: { at?: { x: number; y: number } }): unknown; presence(hands: unknown[], now: number): void };
+    const g = (window as unknown as { __mcGestures?: G }).__mcGestures;
+    expect(g).toBeTruthy();
+    g!.show(true);
+    const target = h.edgeLayout().right as 'ios' | 'android';
+    let t = 1000;
+    for (let i = 0; i <= 14; i++, t += 33) g!.presence([g!.hand('four', 'R', { at: { x: 0.5, y: 0.7 } })], t);
+    for (let i = 0; i <= 10; i++, t += 33) g!.presence([g!.hand('four', 'R', { at: { x: 0.5 + 0.02 * i, y: 0.7 } })], t);
+    await vi.waitFor(() => expect(h.frames().find((f) => f.id === 'f1')?.away).toBe(target));
+    expect(h.sharedBoards().has('f1')).toBe(true);
+  }, 45000);
+});
+
 describe('parseCanvasCommand: send', () => {
   it('parses the send phrases; "send it to my phone" stays talk', () => {
     expect(parseCanvasCommand('send the board to the iPhone')).toEqual({ type: 'sendBoard', to: 'ios' });
