@@ -28,6 +28,16 @@ export interface SpeakerOptions {
   makeUtterance?: (text: string) => UtteranceLike;
   storage?: Storage;
   now?: () => number;
+  /** The page has had a real click / key since load (Chrome plays speech
+   *  only then). Default: navigator.userActivation.hasBeenActive. */
+  activated?: () => boolean;
+  /** Chrome's speech can hang browser-wide (lines queue, `onstart` never
+   *  fires, even after a click). Called with true when that is seen, false
+   *  once a line really starts again. */
+  onStuck?: (stuck: boolean) => void;
+  /** Timers (tests pass fakes). */
+  setTimer?: (f: () => void, ms: number) => unknown;
+  clearTimer?: (h: unknown) => void;
 }
 
 export interface Speaker {
@@ -47,6 +57,8 @@ export interface Speaker {
   /** The browser's voice list has loaded (so a first line is not delayed). */
   voicesReady(): boolean;
   stop(): void;
+  /** A line did not start within STUCK_MS on an activated page (see onStuck). */
+  stuck(): boolean;
 }
 
 function browserSynth(): SynthLike | null {
@@ -75,6 +87,15 @@ function browserUtterance(text: string): UtteranceLike {
 /** A line that could not be spoken because the browser had not loaded its
  *  voice list yet is spoken when the list arrives — if that is this soon. */
 export const VOICES_WAIT_MS = 3000;
+/** A line that has not started this long after speak() on a page she has
+ *  clicked: Chrome's speech is stuck. The queue is cancelled. */
+export const STUCK_MS = 3000;
+export const VOICE_STUCK_LINE = 'Voice is stuck in Chrome — relaunch Chrome to hear replies';
+
+function pageActivated(): boolean {
+  const n = (globalThis as unknown as { navigator?: { userActivation?: { hasBeenActive?: boolean } } }).navigator;
+  return n?.userActivation?.hasBeenActive === true;
+}
 
 export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
   const synth = opts.synth === undefined ? browserSynth() : opts.synth;
@@ -86,6 +107,26 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
   const voiceFor = (lang = 'en-US'): SynthVoice | null =>
     pickSpokenVoice(voices(), { lang, saved: loadSavedVoice(opts.storage), allowCloud: allowCloud() });
   let waiting: { text: string; o: SpeakOptions; at: number } | null = null;
+  const activated = opts.activated ?? pageActivated;
+  const setTimer = opts.setTimer ?? ((f: () => void, ms: number) => setTimeout(f, ms));
+  const clearTimer = opts.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  let stuck = false;
+  let watch: unknown = null;
+  const unwatch = (): void => { if (watch !== null) { clearTimer(watch); watch = null; } };
+  function started(): void {
+    unwatch();
+    if (stuck) { stuck = false; opts.onStuck?.(false); }
+  }
+  /** A fresh line must start soon: if not (and she has clicked), it is stuck. */
+  function watchStart(): void {
+    unwatch();
+    watch = setTimer(() => {
+      watch = null;
+      if (!activated()) return; // not stuck: Chrome is waiting for her first click
+      try { synth?.cancel(); } catch { /* nothing to cancel */ }
+      if (!stuck) { stuck = true; opts.onStuck?.(true); }
+    }, STUCK_MS);
+  }
 
   function speak(text: string, o: SpeakOptions = {}, queue = false): boolean {
     const line = text.trim();
@@ -112,12 +153,15 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
       u.pitch = SPEECH_PITCH;
       u.lang = match?.lang || lang;
       if (match) u.voice = match;
-      if (o.onStart) u.onstart = o.onStart;
+      const onStart = o.onStart;
+      u.onstart = () => { started(); onStart?.(); };
       waiting = null;
       if (!queue) synth.cancel(); // never over itself (a queued sentence follows the one before)
+      // A queued sentence waits behind the one before it; only a fresh line is timed.
+      if (!queue) watchStart();
       synth.speak(u);
       return true;
-    } catch { return false; }
+    } catch { unwatch(); return false; }
   }
 
   try {
@@ -140,6 +184,7 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     speak: (text, o) => speak(text, o),
     enqueue: (text, o) => speak(text, o, true),
     voicesReady: () => raw().length > 0,
-    stop() { waiting = null; try { synth?.cancel(); } catch { /* nothing playing */ } },
+    stop() { waiting = null; unwatch(); try { synth?.cancel(); } catch { /* nothing playing */ } },
+    stuck: () => stuck,
   };
 }

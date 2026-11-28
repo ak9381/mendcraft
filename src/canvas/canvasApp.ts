@@ -148,6 +148,7 @@ import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
+import { createSpeechGate, VOICE_STUCK_LINE } from '../ai/speechGate';
 import { cantDoYetLine, createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, watchdogOutcome, type Outcome, type OutcomeKind, type Turn } from './turns';
 import { answersPrompt, CANCEL_RE, CANCELLED_LINE, createConversation, MODAL_PRIORITY } from './conversation';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
@@ -1252,12 +1253,41 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // she turned that on in More → Voice; the status line is always written.
   // The voice choice lives in the same store as the canvas (memory in a replay).
   const voiceStore = storage as Storage;
-  const speaker = createSpeaker({ storage: voiceStore });
+  // Chrome's speech can hang browser-wide: the gate below shows it on a chip.
+  const speaker = createSpeaker({ storage: voiceStore, onStuck: (stuck) => readAloudLines.setStuck(stuck) });
   let readAloud = loadReadAloud(voiceStore);
   // Only lines a caller opts in are spoken (ai/readAloud.ts): AI replies,
   // a review's title, a command's result or refusal, a pairing outcome.
   // Hints, HUDs and "Listening…" are written, never read.
-  const readAloudLines = createReadAloud({ speaker, enabled: () => readAloud, packLang: () => pack?.lang });
+  // The speech gate (ai/speechGate.ts): no click yet → a chip that stays,
+  // the line held and spoken on her first click or key; voice stuck in
+  // Chrome → a chip saying to relaunch it. Text is always on screen.
+  const speechChip = typeof document !== 'undefined' && !phoneShell ? document.createElement('button') : null;
+  if (speechChip) {
+    speechChip.type = 'button';
+    speechChip.className = 'mc-speech-chip';
+    speechChip.setAttribute('role', 'status');
+    speechChip.hidden = true;
+    root.appendChild(speechChip);
+  }
+  const readAloudLines = createSpeechGate(createReadAloud({ speaker, enabled: () => readAloud, packLang: () => pack?.lang }), {
+    hasBeenActive: () => (typeof navigator === 'undefined' ? true
+      : (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive !== false),
+    enabled: () => readAloud && !phoneShell,
+    chip: (text) => {
+      if (!speechChip) return;
+      speechChip.textContent = text ?? '';
+      speechChip.hidden = !text;
+      speechChip.dataset.kind = text === VOICE_STUCK_LINE ? 'stuck' : 'off';
+    },
+    onFirstGesture: (f) => {
+      if (typeof window === 'undefined') return;
+      const once = (): void => { window.removeEventListener('pointerdown', once, true); window.removeEventListener('keydown', once, true); f(); };
+      window.addEventListener('pointerdown', once, true);
+      window.addEventListener('keydown', once, true);
+    },
+    log: (line) => aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: line }),
+  });
   /** `speak`: true reads this line aloud; a string reads that instead.
    *  `outcome`: this line closes her turn (turns.ts) and is marked ✓ ? ✕. */
   type SayOptions = { speak?: boolean | string; outcome?: OutcomeKind };
@@ -1274,8 +1304,6 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!t.settle(o)) return;
     aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: `outcome ${o.kind}${o.reason ? ` (${o.reason})` : ''} ${((Date.now() - t.startedAt) / 1000).toFixed(1)} s` });
   }
-  const SPEECH_NEEDS_CLICK = 'Click anywhere once to turn on spoken replies.';
-  let speechHintSaid = false;
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
   let intentBusy = false;
   function scheduleDoneCue(): void {
@@ -1308,12 +1336,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (statusLog.length > 400) { statusLog.splice(0, 200); statusBase += 200; }
     fadeStatus(t);
     // Chrome plays speech only after a real click on this page since it
-    // loaded: say so once, instead of staying silent.
-    if (o.speak && readAloud && !speechHintSaid && typeof navigator !== 'undefined'
-      && (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation?.hasBeenActive === false) {
-      speechHintSaid = true;
-      setTimeout(() => { statusEl.textContent = SPEECH_NEEDS_CLICK; fadeStatus(SPEECH_NEEDS_CLICK); }, 1800);
-    }
+    // loaded: the speech gate holds the line and keeps a chip up until then.
     if (t && cuedTurn !== turn.id && t !== LISTENING_STATUS && !phoneShell) scheduleDoneCue();
     if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };

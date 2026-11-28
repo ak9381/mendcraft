@@ -444,7 +444,7 @@ describe('5. the voice list is loaded at startup', () => {
 
   it('the canvas makes its speaker at mount, before any reply', () => {
     const src = read('src/canvas/canvasApp.ts');
-    expect(src.indexOf('const speaker = createSpeaker({ storage: voiceStore });')).toBeGreaterThan(0);
-    expect(src.indexOf('const speaker = createSpeaker({ storage: voiceStore });')).toBeLessThan(src.indexOf('async function openEndedTurn('));
+    expect(src.indexOf('const speaker = createSpeaker({ storage: voiceStore, ')).toBeGreaterThan(0);
+    expect(src.indexOf('const speaker = createSpeaker({ storage: voiceStore, ')).toBeLessThan(src.indexOf('async function openEndedTurn('));
   });
 });

@@ -365,6 +365,12 @@
 .mc-canvas-status:is([data-outcome="done"], [data-outcome="answered"]):not(:empty)::before { content: "\2713"; color: #3FB56B; }
 .mc-canvas-status[data-outcome="asked"]:not(:empty)::before { content: "?"; color: #E0A526; }
 .mc-canvas-status[data-outcome="refused"]:not(:empty)::before { content: "\2715"; color: #E5534B; }
+/* Speech gate (ai/speechGate.ts): stays up until it is fixed — never fades. */
+.mc-speech-chip { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: calc(100vw - 32px);
+  min-height: 44px; padding: 0 18px; border-radius: 999px; border: 1px solid transparent; background: rgb(43 43 43 / 0.92);
+  color: #FFFFFF; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
+.mc-speech-chip[data-kind="stuck"] { border-color: #E5534B; }
+.mc-speech-chip[hidden] { display: none; }
 /* Tools closed (desktop): the status line is a dark centred toast that fades
    ~6 s after the last line (say() clears it), not a permanent full-width pill. */
 @media (min-width: 601px) {
