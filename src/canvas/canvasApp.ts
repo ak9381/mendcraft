@@ -147,6 +147,7 @@ import { extractJson } from '../ai/cloudJson';
 import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
+import { hear } from './hearing';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
@@ -5631,6 +5632,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // a short conversational reply, Nano-first, Gemini when Nano can't answer.
   // No board, no proposal: the question's badge/panel still names what answered.
   async function openEndedTurn(text: string): Promise<void> {
+    // Chat answers what she said, not the fixed-up line routing read.
+    text = heardRaw.get(text) ?? text;
     if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
     const nano = engineFor('nano', 'ask');
     const gemini = engineFor('gemini', 'ask');
@@ -5823,6 +5826,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     };
     setTimeout(tick, 400);
   }
+  /** Fixed line → what she said, for chat (only lines hear() changed; kept small). */
+  const heardRaw = new Map<string, string>();
   /** A line the intent router re-ran: it never goes back to the router. */
   let routingIntent = false;
   /** Bumped by every line: a late Nano answer for an older line is dropped. */
@@ -5919,6 +5924,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       micFabRef.stop();
     }
     captionHeard(text);
+    // Mishearings fixed once (hearing.ts): modals, routes and Nano read the
+    // fixed line; the caption above and chat keep what she said.
+    const heard = hear(text);
+    if (heard.fixes.length) { if (heardRaw.size > 50) heardRaw.clear(); heardRaw.set(heard.text, heard.raw); }
+    text = heard.text;
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.

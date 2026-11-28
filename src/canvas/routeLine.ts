@@ -17,6 +17,7 @@ import { spotifySearchQuery } from './spotifyConnector';
 import { matchPaletteCommand } from './toolPalette';
 import { parseMusicIntent } from '../music/musicIntent';
 import { parseChangeVoice, type ChangeVoiceIntent } from '../ai/speechVoices';
+import { boardPurpose, fixBoard } from './hearing';
 
 export interface RouteWorld {
   /** A plan board that can run the CAD extras (the focused one, else any in overview). */
@@ -124,18 +125,11 @@ const SHOW_DEVICES_RE = /^\s*(?:please\s+)?(?:(?:show|list)\s+(?:me\s+)?(?:all\s
 const DEVICES_BOARD_RE = /\b(?:build|make|create|give|set\s+up|show|put|draw|want)\b[^.?!]{0,40}\b(?:board|page|view|list|table|panel|screen)\b[^.?!]{0,90}\bdevices?\b/i;
 const DEVICES_SEE_RE = /\b(?:see|view|show|list|track)\s+(?:them|it|all\s+of\s+them|(?:all\s+)?(?:my|the|these|our)\s+devices)\s+on\s+(?:this|a|the|one)\s+board\b/i;
 const DEVICES_WHY_RE = /\b(?:track|status|statuses|connected|overview|monitor|see|view|list|show|what(?:'|’)?s\s+(?:on|connected))\b/i;
-// Speech hears "a board" as "about", "a bored", "a boat", "abort"…
-export const fixBoard = (t: string): string => t
-  .replace(/^\s*(?:belt|bolt|built|bill|felt|bell)\s+me\b/i, 'build me')
-  .replace(/\b(build|make|create|give|set\s+up)(\s+me)?\s+(?:about|a\s*bout|a\s+bored|a\s+bord|a\s+boat|a\s+bird|a\s+bold|abort|aboard)\b/gi, '$1$2 a board');
+// Speech hears "a board" as "about", "a bored", "a boat", "abort"… (hearing.ts).
+export { fixBoard };
 // What she wants it FOR decides the board, not the word she used for it:
 // "a dashboard to keep track of my devices and their status" is the status board.
-const STATUS_WORDS_RE = /\b(?:status|statuses|keep\s+track|track\s+of|what(?:'|’)?s\s+(?:on|connected)|(?:are|is)\s+(?:connected|working|online))\b/i;
-const CONTROL_WORDS_RE = /\b(?:control|controls|turn\s+(?:on|off)|switch(?:es)?|dim|brighten|brightness|volume|play|pause|sliders?|buttons?\s+(?:to|for)\s+(?:turn|switch|dim|play))\b/i;
-export const wantsStatusBoard = (raw: string): boolean => {
-  const text = fixBoard(raw);
-  return STATUS_WORDS_RE.test(text) && /\bdevices?\b/i.test(text) && !CONTROL_WORDS_RE.test(text);
-};
+export const wantsStatusBoard = (raw: string): boolean => boardPurpose(raw) === 'status' && /\bdevices?\b/i.test(fixBoard(raw));
 export const isShowDevices = (raw: string): boolean => {
   const text = fixBoard(raw);
   if (SHOW_DEVICES_RE.test(text) || DEVICES_SEE_RE.test(text)) return true;

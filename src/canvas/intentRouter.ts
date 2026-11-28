@@ -4,6 +4,7 @@
 // (Chrome enforces the schema). Code then runs that action exactly as if she
 // had said its fixed phrase: same routes, same reviews, same checks. Nothing
 // here acts on its own, and an unsure answer asks her first.
+import { boardPurpose } from './hearing';
 
 export interface IntentAction {
   id: string;
@@ -93,12 +94,9 @@ export function decideIntent(p: IntentPick | null): IntentDecision {
 const ASK_FIRST: ReadonlySet<string> = new Set(['floorPlan']);
 const QUESTION_RE = /^\s*(?:what|why|how|who|when|where|which)\b|\?\s*$/i;
 const REQUEST_RE = /^\s*(?:can|could|would|will)\s+you\b/i;
-const STATUS_WORDS = /\b(?:status|statuses|keep\s+track|track\s+of|connected|what(?:'|’)?s\s+(?:on|connected)|working|online)\b/i;
-const CONTROL_WORDS = /\b(?:control|controls|turn\s+(?:on|off)|switch|dim|brighten|brightness|volume|play|pause|slider|buttons?\s+to)\b/i;
-/** Status words and no control words: the status board, whatever Nano said. */
 export function statusNotDashboard(d: IntentDecision, text: string): IntentDecision {
   if (d.kind === 'chat' || d.action.id !== 'buildDashboard') return d;
-  if (!STATUS_WORDS.test(text) || CONTROL_WORDS.test(text)) return d;
+  if (boardPurpose(text) !== 'status') return d;
   const show = INTENT_ACTIONS.find((a) => a.id === 'showDevices')!;
   return { kind: d.kind, action: show };
 }
