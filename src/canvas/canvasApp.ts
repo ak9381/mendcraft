@@ -5876,6 +5876,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (!askCard) { void openEndedTurn(text); return; }
     // The second miss in a row: say what works instead of another card.
     if (++misses >= 2) { misses = 0; say(cantDoYetLine(), { speak: true, outcome: 'refused' }); autoHideAi(); return; }
+    // Logged for the mishearing table (hearing.ts): a line nothing could place.
+    stage(`unplaced "${text.slice(0, 120)}"`);
     const cs = choicesFor(pick);
     intentChoices = { text, cs };
     askCard.showChoices(CHOICES_LINE, cs.map((c) => cap(c.label)), SOMETHING_ELSE, (i) => pickIntentChoice(i));

@@ -35,6 +35,7 @@ describe('turn stages (window.__mcTurns)', () => {
     expect(ask.outcome).toBe('asked');
     expect(ask.stages[0]).toBe('heard "build me a thing for the stuff"');
     expect(ask.stages).toContain('no Nano → choices');
+    expect(ask.stages).toContain('unplaced "build me a thing for the stuff"');
     expect(ask.stages.some((l) => /^outcome asked /.test(l))).toBe(true);
     // her pick answers the card: the modal claims it and the picked route runs
     h.run('the first one');
