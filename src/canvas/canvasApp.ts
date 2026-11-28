@@ -3684,8 +3684,9 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       return (t.type === 'row' || t.type === 'grid' || t.type === 'card') ? t.children.flatMap(flat) : [t];
     });
     const said: string[] = [];
-    for (const t of tiles) {
+    for (let t of tiles) {
       if (t.type === 'music') {
+        t = { ...t, label: t.label.charAt(0).toUpperCase() + t.label.slice(1) };
         const id = loadTokens() && !opts.sim ? SPOTIFY_SPEAKER_ID : t.deviceId;
         if (!store.get(id)) store.add(id, { cls: 'music', on: false, brightness: 0, playing: false, trackTitle: '', source: 'spotify', playingOn: '', sim: !!opts.sim });
         DEVICE_LABELS[id] = t.label;

@@ -111,6 +111,13 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
   const setTimer = opts.setTimer ?? ((f: () => void, ms: number) => setTimeout(f, ms));
   const clearTimer = opts.clearTimer ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   let stuck = false;
+  /** Something is really playing or queued (fakes without the flags count as busy). */
+  const busySynth = (): boolean => {
+    const x = synth as unknown as { speaking?: boolean; pending?: boolean } | null;
+    if (!x) return false;
+    if (typeof x.speaking !== 'boolean' && typeof x.pending !== 'boolean') return true;
+    return !!x.speaking || !!x.pending;
+  };
   let watch: unknown = null;
   const unwatch = (): void => { if (watch !== null) { clearTimer(watch); watch = null; } };
   function started(): void {
@@ -123,7 +130,8 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     watch = setTimer(() => {
       watch = null;
       if (!activated()) return; // not stuck: Chrome is waiting for her first click
-      try { synth?.cancel(); } catch { /* nothing to cancel */ }
+      // No cancel here: cancelling while Chrome is still loading a voice can
+      // wedge its speech engine for the whole browser. Say so, change nothing.
       if (!stuck) { stuck = true; opts.onStuck?.(true); }
     }, STUCK_MS);
   }
@@ -156,7 +164,9 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
       const onStart = o.onStart;
       u.onstart = () => { started(); onStart?.(); };
       waiting = null;
-      if (!queue) synth.cancel(); // never over itself (a queued sentence follows the one before)
+      // Never over itself; but only cancel what is really playing (a cancel with
+      // nothing playing, mid voice-load, can wedge Chrome's speech engine).
+      if (!queue && busySynth()) synth.cancel();
       // A queued sentence waits behind the one before it; only a fresh line is timed.
       if (!queue) watchStart();
       synth.speak(u);
@@ -184,7 +194,7 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     speak: (text, o) => speak(text, o),
     enqueue: (text, o) => speak(text, o, true),
     voicesReady: () => raw().length > 0,
-    stop() { waiting = null; unwatch(); try { synth?.cancel(); } catch { /* nothing playing */ } },
+    stop() { waiting = null; unwatch(); try { if (busySynth()) synth?.cancel(); } catch { /* nothing playing */ } },
     stuck: () => stuck,
   };
 }

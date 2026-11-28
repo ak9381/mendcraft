@@ -87,7 +87,7 @@ const mem = (): Storage => { const m = new Map<string, string>(); return { getIt
 const utter = (text: string): UtteranceLike => ({ text, rate: 1, pitch: 1, lang: '', voice: null });
 
 describe('speaker: stuck detection', () => {
-  it('a line that never starts on a clicked page: the queue is cancelled and voice is marked stuck', () => {
+  it('a line that never starts on a clicked page: voice is marked stuck and nothing is cancelled (a cancel can wedge Chrome)', () => {
     const f = fakeSynth({ starts: false });
     const tm = fakeTimers();
     const stuck: boolean[] = [];
@@ -96,7 +96,7 @@ describe('speaker: stuck detection', () => {
     expect(tm.armed()).toBe(true);
     const before = f.cancels();
     tm.fire();
-    expect(f.cancels()).toBe(before + 1);
+    expect(f.cancels()).toBe(before);
     expect(sp.stuck()).toBe(true);
     expect(stuck).toEqual([true]);
     // Still tried next time; when one finally starts, the stuck mark goes.
