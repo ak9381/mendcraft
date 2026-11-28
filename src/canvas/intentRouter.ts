@@ -68,8 +68,9 @@ export function parseIntent(full: string): IntentPick | null {
   } catch { return null; }
 }
 
-/** On-device calls open a fresh session each time: give Nano time, then chat. */
-export const INTENT_WAIT_MS = 15_000;
+/** On-device calls open a fresh session each time: give Nano 10 s (a line
+ *  says "Still working…" at 4 s), then choices or chat. */
+export const INTENT_WAIT_MS = 10_000;
 export const INTENT_WORKING_LINE = 'Working out what you meant…';
 
 export const RUN_AT = 0.7;

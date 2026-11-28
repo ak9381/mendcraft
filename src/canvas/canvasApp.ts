@@ -148,6 +148,7 @@ import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
+import { createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, type Turn } from './turns';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
@@ -5663,9 +5664,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // study…"), nothing more of it is shown or spoken — the honest line
     // replaces it at the end (promiseGuard).
     let promised = false;
+    const t = turn;
     try {
       r = await openEndedAsk(text, nano, gemini, (full) => {
-        if (promised) return;
+        if (promised || !t.live()) return;
         // Only whole clauses the guard has cleared are shown and spoken; a
         // clause that could still become a promise waits for its sentence.
         const safe = guardSafePrefix(full);
@@ -5675,12 +5677,15 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         live.update(safe);
       }, prepare);
     } catch (e) {
+      if (!t.live()) { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: 'dropped: stale' }); settleEngines(); autoHideAi(); return; }
       const why = `No answer. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
       aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
       settleEngines(); autoHideAi();
       return;
     }
+    // She said something else meanwhile: this reply is for an older line.
+    if (!t.live()) { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: 'dropped: stale' }); panels.forEngine(r.engineId).log('done', 'reply dropped: you had moved on'); settleEngines(); autoHideAi(); return; }
     // A cloud reply may carry the redaction tokens back: real names return on this device.
     const guarded = promiseGuard(r.engineId === 'gemini' ? fillVisible(r.reply).text : r.reply, text);
     const reply = guarded.reply;
@@ -5830,8 +5835,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const heardRaw = new Map<string, string>();
   /** A line the intent router re-ran: it never goes back to the router. */
   let routingIntent = false;
-  /** Bumped by every line: a late Nano answer for an older line is dropped. */
-  let lineSeq = 0;
+  /** One turn per line (turns.ts): a newer line aborts it, so a late Nano or
+   *  chat answer for an older line says and does nothing. */
+  const turns = createTurns();
+  let turn: Turn = turns.begin('');
   function askAnswer(a: 'yes' | 'no'): void {
     if (gimbalAsk.active()) { gimbalAsk.handle(a); return; }
     if (intentAsk) answerIntent(a);
@@ -5862,18 +5869,23 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(INTENT_WORKING_LINE);
     const t0 = Date.now();
     const panel = panels.forEngine('nano');
-    const seq = lineSeq;
+    const t = turn;
     const stop = new AbortController();
+    const onStale = (): void => stop.abort();
+    t.signal.addEventListener('abort', onStale);
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // A slow pick says so at 4 s, and gives up at 10 s (then: choices for a
+    // command, chat for anything else — as for no answer).
+    const still = setTimeout(() => { if (t.live() && intentBusy) say(INTENT_STILL_LINE); }, INTENT_STILL_MS);
     let full = '';
     try {
       full = await Promise.race([
         nano.stream(si.prompt, () => {}, { shape: 'json', constraint: INTENT_CONSTRAINT, maxChars: 160, signal: stop.signal }),
         new Promise<string>((res) => { timer = setTimeout(() => { stop.abort(); res(''); }, INTENT_WAIT_MS); }),
       ]);
-    } catch { full = ''; } finally { if (timer) clearTimeout(timer); intentBusy = false; }
+    } catch { full = ''; } finally { if (timer) clearTimeout(timer); clearTimeout(still); t.signal.removeEventListener('abort', onStale); intentBusy = false; }
     // She moved on (another line, a question card, a review): this answer is stale.
-    if (seq !== lineSeq || gimbalAsk.active() || intentAsk || intentChoices || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
+    if (!t.live() || gimbalAsk.active() || intentAsk || intentChoices || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
     const pick = parseIntent(full);
     const d = askFirst(decideIntent(pick), text);
     const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
@@ -5915,7 +5927,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
     speaker.stop();
-    if (!routingIntent) lineSeq++;
+    if (!routingIntent) turn = turns.begin(text);
     // One sentence per Talk on the laptop: the mic closes once her words are
     // in, so narration around a command is never heard as another command.
     // (A question that wants an answer reopens it, e.g. the gimbal ask.)
