@@ -5735,10 +5735,29 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say: (line) => say(line, { speak: true }),
     standReported: () => standReported(),
     proceed: (t) => connectRoomOnDashboard(t),
+    // Opening the mic stops speech, so wait for the question to finish being
+    // spoken, then listen for her yes (no Talk press, nothing cut off).
+    listen: () => {
+      if (typeof window === 'undefined' || !voice?.supported) return;
+      const synth = (window as unknown as { speechSynthesis?: { speaking: boolean; pending?: boolean } }).speechSynthesis;
+      const t0 = Date.now();
+      const tick = (): void => {
+        if (synth && (synth.speaking || synth.pending) && Date.now() - t0 < 10000) { setTimeout(tick, 150); return; }
+        setTimeout(() => { if (gimbalAsk.active() && micFabRef && !micFabRef.listening) micFabRef.toggle(); }, 250);
+      };
+      setTimeout(tick, 500);
+    },
   });
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
     speaker.stop();
+    // One sentence per Talk on the laptop: the mic closes once her words are
+    // in, so narration around a command is never heard as another command.
+    // (A question that wants an answer reopens it, e.g. the gimbal ask.)
+    if (!phoneShell && micFabRef?.listening) {
+      if (statusEl.textContent === LISTENING_STATUS) statusEl.textContent = '';
+      micFabRef.stop();
+    }
     captionHeard(text);
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled

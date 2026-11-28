@@ -33,6 +33,14 @@ describe('gimbalAsk', () => {
     expect(ask.active()).toBe(true);
   });
 
+  it('opens the mic after each question', () => {
+    let n = 0;
+    const ask = createGimbalAsk({ say: () => {}, standReported: () => false, proceed: () => {}, listen: () => { n++; } });
+    ask.start('add the gimbal'); expect(n).toBe(1);
+    ask.handle('yes'); expect(n).toBe(2);
+    ask.handle('yes'); expect(n).toBe(3); // not docked: asks again and listens
+  });
+
   it('accepts natural yeses', () => {
     for (const y of ['yes', 'Yeah.', 'okay', 'yes please', "it's on", 'it is on', 'done', 'yep, it’s on', 'switched on']) {
       const { ask, said } = setup();

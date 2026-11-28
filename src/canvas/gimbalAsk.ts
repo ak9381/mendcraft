@@ -18,6 +18,8 @@ export interface GimbalAskDeps {
   say(line: string): void;
   standReported(): boolean;
   proceed(text: string): void;
+  /** Open the mic for her answer once the question has been spoken. */
+  listen?(): void;
 }
 
 export interface GimbalAsk {
@@ -32,16 +34,16 @@ export function createGimbalAsk(d: GimbalAskDeps): GimbalAsk {
   let step: 'on' | 'dock' | null = null;
   let original = '';
   return {
-    start(text) { original = text; step = 'on'; d.say(GIMBAL_ASK_ON); },
+    start(text) { original = text; step = 'on'; d.say(GIMBAL_ASK_ON); d.listen?.(); },
     active: () => step !== null,
     cancel() { step = null; },
     handle(text) {
       if (!step) return false;
       if (NO_RE.test(text)) { step = null; d.say(GIMBAL_ASK_CANCEL); return true; }
-      if (WAIT_RE.test(text)) { d.say(GIMBAL_ASK_WAIT); return true; }
+      if (WAIT_RE.test(text)) { d.say(GIMBAL_ASK_WAIT); d.listen?.(); return true; }
       if (!YES_RE.test(text)) { step = null; return false; } // something else: the ask ends, the line runs normally
-      if (step === 'on') { step = 'dock'; d.say(GIMBAL_ASK_DOCK); return true; }
-      if (!d.standReported()) { d.say(GIMBAL_ASK_NOT_DOCKED); return true; }
+      if (step === 'on') { step = 'dock'; d.say(GIMBAL_ASK_DOCK); d.listen?.(); return true; }
+      if (!d.standReported()) { d.say(GIMBAL_ASK_NOT_DOCKED); d.listen?.(); return true; }
       step = null;
       d.say(GIMBAL_ASK_DOCKED);
       d.proceed(original);
