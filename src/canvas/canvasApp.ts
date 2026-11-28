@@ -32,6 +32,7 @@ import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt } from './tryToBreak';
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
+import { mountAskCard } from './askCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
 import { startPhoneJoin } from './phoneJoin';
@@ -5731,22 +5732,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId !== target) { sync(); void focus(target); }
     void connectRoom(target, text);
   }
+  const askCard = typeof document !== 'undefined' && !phoneShell
+    ? mountAskCard(root, { yes: () => { gimbalAsk.handle('yes'); }, no: () => { gimbalAsk.handle('no'); } })
+    : null;
   const gimbalAsk = createGimbalAsk({
     say: (line) => say(line, { speak: true }),
     standReported: () => standReported(),
     proceed: (t) => connectRoomOnDashboard(t),
-    // Opening the mic stops speech, so wait for the question to finish being
-    // spoken, then listen for her yes (no Talk press, nothing cut off).
-    listen: () => {
-      if (typeof window === 'undefined' || !voice?.supported) return;
-      const synth = (window as unknown as { speechSynthesis?: { speaking: boolean; pending?: boolean } }).speechSynthesis;
-      const t0 = Date.now();
-      const tick = (): void => {
-        if (synth && (synth.speaking || synth.pending) && Date.now() - t0 < 10000) { setTimeout(tick, 150); return; }
-        setTimeout(() => { if (gimbalAsk.active() && micFabRef && !micFabRef.listening) micFabRef.toggle(); }, 250);
-      };
-      setTimeout(tick, 500);
-    },
+    show: (q) => { if (q) askCard?.show(q); else askCard?.hide(); },
   });
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
@@ -5767,6 +5760,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (pairFirst.handleSpeech(text)) return true;
     // "Is the gimbal switched on?" / "Put the iPhone on the gimbal": her yes answers it.
     if (gimbalAsk.handle(text)) return true;
+    // The question card is modal: nothing else runs until it is answered.
+    if (gimbalAsk.active()) { say('Answer the question first: yes or no.', { speak: true }); return true; }
     // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
     if (handlePointChoice(text)) return true;
     // CAD extras go to the focused plan board (else any plan board); with no

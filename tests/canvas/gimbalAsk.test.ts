@@ -33,12 +33,16 @@ describe('gimbalAsk', () => {
     expect(ask.active()).toBe(true);
   });
 
-  it('opens the mic after each question', () => {
-    let n = 0;
-    const ask = createGimbalAsk({ say: () => {}, standReported: () => false, proceed: () => {}, listen: () => { n++; } });
-    ask.start('add the gimbal'); expect(n).toBe(1);
-    ask.handle('yes'); expect(n).toBe(2);
-    ask.handle('yes'); expect(n).toBe(3); // not docked: asks again and listens
+  it('puts each question on screen and takes it down when answered', () => {
+    const shown: (string | null)[] = [];
+    const s = { docked: false };
+    const ask = createGimbalAsk({ say: () => {}, standReported: () => s.docked, proceed: () => {}, show: (q) => shown.push(q) });
+    ask.start('add the gimbal');
+    ask.handle('yes');
+    ask.handle('yes');
+    s.docked = true;
+    ask.handle('yes');
+    expect(shown).toEqual([GIMBAL_ASK_ON, GIMBAL_ASK_DOCK, GIMBAL_ASK_NOT_DOCKED, null]);
   });
 
   it('accepts natural yeses', () => {
@@ -61,12 +65,11 @@ describe('gimbalAsk', () => {
     expect(a.ask.active()).toBe(false);
   });
 
-  it('any other line ends the ask and runs normally', () => {
+  it('any other line is not an answer: the question stays up', () => {
     const { ask, ran } = setup(true);
     ask.start('add the gimbal');
     expect(ask.handle('turn on the lamp')).toBe(false);
-    expect(ask.active()).toBe(false);
-    expect(ask.handle('yes')).toBe(false);
+    expect(ask.active()).toBe(true);
     expect(ran).toEqual([]);
   });
 });

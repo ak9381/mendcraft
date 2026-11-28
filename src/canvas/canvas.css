@@ -2117,3 +2117,15 @@
   max-width: var(--mc-phone-side-w); overflow: hidden; text-overflow: ellipsis;
 }
 .mc-menu-open .mc-read-aloud { display: none !important; }
+
+/* Yes / No question card (askCard.ts): modal over the canvas. */
+.mc-ask-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: rgba(30, 26, 20, 0.28); }
+.mc-ask-backdrop[hidden] { display: none; }
+.mc-ask-card { width: min(520px, calc(100vw - 32px)); box-sizing: border-box; padding: 28px 28px 20px;
+  background: #FBF7EF; color: #2B2B2B; border: 1px solid var(--border, #E4E0D8); border-radius: 20px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18); }
+.mc-ask-question { margin: 0 0 22px; font-size: 26px; line-height: 1.25; font-weight: 650; }
+.mc-ask-actions { display: flex; gap: 12px; }
+.mc-ask-actions .mc-btn { flex: 1 1 0; min-height: 60px; font-size: 20px; }
+.mc-ask-hint { margin: 14px 0 0; font-size: 14px; color: #6B655C; }

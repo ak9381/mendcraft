@@ -4,9 +4,9 @@
 // her word. Fixed code, no model. Pure: the canvas passes what it needs.
 
 export const GIMBAL_ASK_ON = 'Is the gimbal switched on?';
-export const GIMBAL_ASK_DOCK = 'Put the iPhone on the gimbal, then say yes.';
+export const GIMBAL_ASK_DOCK = 'Put the iPhone on the gimbal. Is it on?';
 export const GIMBAL_ASK_DOCKED = 'The iPhone is on the gimbal. Adding it.';
-export const GIMBAL_ASK_NOT_DOCKED = 'I don’t see the iPhone on the gimbal yet. Dock it, then say yes.';
+export const GIMBAL_ASK_NOT_DOCKED = 'I don’t see the iPhone on the gimbal yet. Is it docked now?';
 export const GIMBAL_ASK_WAIT = 'Okay. Say yes when it’s ready.';
 export const GIMBAL_ASK_CANCEL = 'Okay, I won’t add the gimbal.';
 
@@ -18,8 +18,8 @@ export interface GimbalAskDeps {
   say(line: string): void;
   standReported(): boolean;
   proceed(text: string): void;
-  /** Open the mic for her answer once the question has been spoken. */
-  listen?(): void;
+  /** Put the question on screen (Yes / No); null takes it down. */
+  show?(question: string | null): void;
 }
 
 export interface GimbalAsk {
@@ -34,17 +34,18 @@ export function createGimbalAsk(d: GimbalAskDeps): GimbalAsk {
   let step: 'on' | 'dock' | null = null;
   let original = '';
   return {
-    start(text) { original = text; step = 'on'; d.say(GIMBAL_ASK_ON); d.listen?.(); },
+    start(text) { original = text; step = 'on'; d.say(GIMBAL_ASK_ON); d.show?.(GIMBAL_ASK_ON); },
     active: () => step !== null,
-    cancel() { step = null; },
+    cancel() { step = null; d.show?.(null); },
     handle(text) {
       if (!step) return false;
-      if (NO_RE.test(text)) { step = null; d.say(GIMBAL_ASK_CANCEL); return true; }
-      if (WAIT_RE.test(text)) { d.say(GIMBAL_ASK_WAIT); d.listen?.(); return true; }
-      if (!YES_RE.test(text)) { step = null; return false; } // something else: the ask ends, the line runs normally
-      if (step === 'on') { step = 'dock'; d.say(GIMBAL_ASK_DOCK); d.listen?.(); return true; }
-      if (!d.standReported()) { d.say(GIMBAL_ASK_NOT_DOCKED); d.listen?.(); return true; }
+      if (NO_RE.test(text)) { step = null; d.show?.(null); d.say(GIMBAL_ASK_CANCEL); return true; }
+      if (WAIT_RE.test(text)) { d.say(GIMBAL_ASK_WAIT); return true; }
+      if (!YES_RE.test(text)) return false; // the question stays up; the canvas refuses other lines while it waits
+      if (step === 'on') { step = 'dock'; d.say(GIMBAL_ASK_DOCK); d.show?.(GIMBAL_ASK_DOCK); return true; }
+      if (!d.standReported()) { d.say(GIMBAL_ASK_NOT_DOCKED); d.show?.(GIMBAL_ASK_NOT_DOCKED); return true; }
       step = null;
+      d.show?.(null);
       d.say(GIMBAL_ASK_DOCKED);
       d.proceed(original);
       return true;
