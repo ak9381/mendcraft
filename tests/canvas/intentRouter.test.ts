@@ -64,3 +64,27 @@ describe('status board, not dashboard', () => {
     expect(d.kind === 'run' && d.action.id).toBe('buildDashboard');
   });
 });
+
+import { isCommand, choicesFor, pickChoice } from '../../src/canvas/intentRouter';
+describe("ask, don't guess", () => {
+  it('commands vs questions', () => {
+    for (const t of ['build me about to keep track of my devices', 'belt me a bored', 'can you put everything on one screen', 'I want a board for my stuff', 'please hook it up', "let's make a board", 'so now show me everything'])
+      expect(isCommand(t), t).toBe(true);
+    for (const t of ['what is a gimbal?', 'how are you', 'tell me a joke', 'can you tell me what a gimbal is', 'thanks'])
+      expect(isCommand(t), t).toBe(false);
+  });
+  it("choices: Nano's guess first, then the three boards, three at most", () => {
+    expect(choicesFor({ intent: 'connectGimbal', confidence: 0.5 }).map((a) => a.id)).toEqual(['connectGimbal', 'showDevices', 'buildDashboard']);
+    expect(choicesFor(null).map((a) => a.id)).toEqual(['showDevices', 'buildDashboard', 'floorPlan']);
+    expect(choicesFor({ intent: 'chat', confidence: 0.9 }).map((a) => a.id)).toEqual(['showDevices', 'buildDashboard', 'floorPlan']);
+  });
+  it('her spoken pick', () => {
+    const cs = choicesFor(null);
+    expect(pickChoice('the first one', cs)).toBe(0);
+    expect(pickChoice('the status board', cs)).toBe(0);
+    expect(pickChoice('dashboard', cs)).toBe(1);
+    expect(pickChoice('floor plan please', cs)).toBe(2);
+    expect(pickChoice('something else', cs)).toBe(-1);
+    expect(pickChoice('banana', cs)).toBeNull();
+  });
+});

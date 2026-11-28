@@ -33,7 +33,7 @@ import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
 import { createGimbalAsk } from './gimbalAsk';
 import { mountAskCard } from './askCard';
-import { askFirst, askLine, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
+import { askFirst, askLine, choicesFor, choicesSpoken, CHOICES_LINE, isCommand, pickChoice, SAY_AGAIN_LINE, SOMETHING_ELSE, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
 import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
 import { createClickCooldown } from '../input/clickCooldown';
 import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } from './connectSheet';
@@ -1270,7 +1270,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     doneTimer = setTimeout(() => {
       doneTimer = null;
       const waiting = turnBusy || intentBusy || streamsOut > 0 || reviewBusy() || gimbalAsk.active() || !!intentAsk
-        || !!pointWait || !!iphonePoint || pairFirst.phase() === 'pairing' || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
+        || !!intentChoices || !!pointWait || !!iphonePoint || pairFirst.phase() === 'pairing' || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
       if (waiting) { scheduleDoneCue(); return; }
       say(DONE_CUE, { speak: true });
     }, 2500);
@@ -5796,6 +5796,33 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     : null;
   /** "Did you mean …?" from the intent router, waiting for her yes / no. */
   let intentAsk: { action: IntentAction; text: string } | null = null;
+  /** "Did you mean: A, B, C or something else?" waiting for her pick. */
+  let intentChoices: { text: string; cs: IntentAction[] } | null = null;
+  const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+  function offerChoices(text: string, pick: Parameters<typeof choicesFor>[0]): void {
+    if (!askCard) { void openEndedTurn(text); return; }
+    const cs = choicesFor(pick);
+    intentChoices = { text, cs };
+    askCard.showChoices(CHOICES_LINE, cs.map((c) => cap(c.label)), SOMETHING_ELSE, (i) => pickIntentChoice(i));
+    say(choicesSpoken(cs), { speak: true });
+    autoHideAi();
+  }
+  function pickIntentChoice(i: number): void {
+    const c = intentChoices; if (!c) return;
+    intentChoices = null; askCard?.hide();
+    const a = i >= 0 ? c.cs[i] : undefined;
+    if (a) { say(understoodLine(a)); runIntentPhrase(a.phrase(c.text)); return; }
+    // Something else: ask her to say it again, and listen once it is said.
+    say(SAY_AGAIN_LINE, { speak: true });
+    if (typeof window === 'undefined' || !voice?.supported) return;
+    const synth = (window as unknown as { speechSynthesis?: { speaking: boolean; pending?: boolean } }).speechSynthesis;
+    const t0 = Date.now();
+    const tick = (): void => {
+      if (synth && (synth.speaking || synth.pending) && Date.now() - t0 < 6000) { setTimeout(tick, 150); return; }
+      setTimeout(() => { if (micFabRef && !micFabRef.listening) micFabRef.toggle(); }, 250);
+    };
+    setTimeout(tick, 400);
+  }
   /** A line the intent router re-ran: it never goes back to the router. */
   let routingIntent = false;
   /** Bumped by every line: a late Nano answer for an older line is dropped. */
@@ -5818,7 +5845,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  closed list, or chat. Code runs it like her fixed phrase; unsure → ask. */
   async function intentTurn(text: string): Promise<void> {
     const nano = engineFor('nano', 'ask');
-    if (!nano || nano.id !== 'nano' || nano.sim || reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
+    if (reviewBusy() || turnBusy) { void openEndedTurn(text); return; }
+    if (!nano || nano.id !== 'nano' || nano.sim) {
+      // No Nano here: a command still asks, never chats.
+      if (isCommand(text) && askCard && !opts.sim) { offerChoices(text, null); return; }
+      void openEndedTurn(text); return;
+    }
     const si: SentInfo = { engine: 'nano', prompt: intentPrompt(fixBoard(text)), sent: null, routeLine: 'Nano · on device — working out which action you meant · nothing left this device', sim: false };
     aiSent(text, si, { task: 'generic', swarm: false });
     intentBusy = true;
@@ -5836,7 +5868,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       ]);
     } catch { full = ''; } finally { if (timer) clearTimeout(timer); intentBusy = false; }
     // She moved on (another line, a question card, a review): this answer is stale.
-    if (seq !== lineSeq || gimbalAsk.active() || intentAsk || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
+    if (seq !== lineSeq || gimbalAsk.active() || intentAsk || intentChoices || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
     const pick = parseIntent(full);
     const d = askFirst(decideIntent(pick), text);
     const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
@@ -5853,6 +5885,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       askCard.show(askLine(d.action));
       say(askLine(d.action), { speak: true });
       autoHideAi();
+      return;
+    }
+    // A command it could not place never goes to chat (chat only talks): ask.
+    if (isCommand(text)) {
+      panel.log('done', `not sure which action${conf} → asked her`);
+      offerChoices(text, pick);
       return;
     }
     panel.log('done', pick ? `not an action → chat${conf}` : 'no clear action → chat');
@@ -5884,6 +5922,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Morph-first: while the morph card is open, speech (and the say box)
     // means "edit this tile"; "undo" / "cancel" are meta-commands handled
     // locally and never reach a model.
+    // "Did you mean: A, B, C or something else?": her pick answers it.
+    if (intentChoices) {
+      const i = pickChoice(text, intentChoices.cs);
+      if (i !== null) { pickIntentChoice(i); return true; }
+      say(`Pick one: ${intentChoices.cs.map((c) => c.label).join(', ')}, or say something else.`, { speak: true }); return true;
+    }
     // "Did you mean …?": her yes / no answers it; nothing else runs meanwhile.
     if (intentAsk) {
       if (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i.test(text)) { answerIntent('yes'); return true; }

@@ -111,4 +111,49 @@ export function askFirst(d0: IntentDecision, text: string): IntentDecision {
 }
 
 export const askLine = (a: IntentAction): string => `Did you mean: ${a.label}?`;
+export const choicesSpoken = (cs: readonly IntentAction[]): string => `${CHOICES_LINE} ${cs.map((c) => c.label).join(', ')}, or something else?`;
 export const understoodLine = (a: IntentAction): string => `Understood: ${a.label}.`;
+
+// ---- Ask, don't guess ----
+// A command Mendcraft could not map confidently never goes to chat (chat can
+// only talk, so it would answer "I understand…" and do nothing). It asks
+// with choices instead; "Something else" lets her say it again.
+
+const COMMAND_RE = /^\s*(?:(?:hey|ok(?:ay)?|so|now|and|then)[,\s]+)*(?:please\s+)?(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?(?!tell\s+me\b|explain\b)|i\s+(?:want|need|would\s+like|'d\s+like)\s+(?:to\s+|a\s+|an\s+|the\s+)?|let(?:'|’)?s\s+)?(?:build|belt|bolt|built|make|create|show|connect|hook|add|put|set\s+up|turn|open|play|draw|give|start|stop|remove|delete|change|move|switch|dim|pair|link|track|view|see|list|bring|get)\b/i;
+/** Sounds like an instruction (not a question or small talk). */
+const WANT_RE = /^\s*(?:(?:hey|ok(?:ay)?|so|now|and|then)[,\s]+)*(?:please\s+)?i\s+(?:want|need|would\s+like|'d\s+like)\b/i;
+export function isCommand(text: string): boolean { return COMMAND_RE.test(text) || WANT_RE.test(text); }
+
+export const SOMETHING_ELSE = 'Something else';
+export const CHOICES_LINE = 'I didn’t catch which one. Did you mean:';
+export const SAY_AGAIN_LINE = 'Okay — say it another way.';
+
+/** Up to three actions to offer: Nano's guess first (if it had one), then
+ *  the three boards people mix up. */
+export function choicesFor(p: IntentPick | null): IntentAction[] {
+  const byId = (id: string) => INTENT_ACTIONS.find((a) => a.id === id);
+  const out: IntentAction[] = [];
+  const guess = p && p.intent !== CHAT_INTENT && p.confidence >= 0.2 ? byId(p.intent) : undefined;
+  if (guess) out.push(guess);
+  for (const id of ['showDevices', 'buildDashboard', 'floorPlan']) {
+    const a = byId(id);
+    if (a && !out.includes(a)) out.push(a);
+    if (out.length === 3) break;
+  }
+  return out;
+}
+
+/** Her spoken answer to the choices: an index, -1 for "something else", or null. */
+export function pickChoice(text: string, choices: readonly IntentAction[]): number | null {
+  const t = text.toLowerCase();
+  if (/\b(?:something\s+else|none|neither|no(?:pe)?|other|cancel|never\s*mind)\b/.test(t)) return -1;
+  const ord = [/\b(?:first|one|1st|top)\b/, /\b(?:second|two|2nd|middle)\b/, /\b(?:third|three|3rd|last)\b/];
+  for (let i = 0; i < choices.length; i++) if (ord[i]?.test(t)) return i;
+  const key: Record<string, RegExp> = {
+    showDevices: /\b(?:status|devices?\s+board|track|connected)\b/, buildDashboard: /\b(?:dash\s*-?board|controls?)\b/,
+    floorPlan: /\bfloor\s*plan|\bplan\b/, connectGimbal: /\bgimbal|stand\b/, pointConnect: /\bpoint/, connectPhones: /\bphones?\b/,
+    connectLamp: /\b(?:lamp|light|bulb)\b/, connectSpeaker: /\b(?:speaker|music)\b/, newBoard: /\bnew\s+board\b/,
+  };
+  for (let i = 0; i < choices.length; i++) if (key[choices[i]!.id]?.test(t)) return i;
+  return null;
+}

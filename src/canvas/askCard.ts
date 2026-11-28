@@ -6,6 +6,8 @@
 
 export interface AskCard {
   show(question: string, labels?: { yes?: string; no?: string }): void;
+  /** Several choices (first = thumbs up) and "Something else" (thumbs down). */
+  showChoices(question: string, labels: readonly string[], elseLabel: string, onPick: (i: number) => void): void;
   hide(): void;
   isOpen(): boolean;
 }
@@ -39,17 +41,46 @@ export function mountAskCard(root: HTMLElement, on: { yes(): void; no(): void },
   root.append(back);
   // The backdrop swallows presses so the board behind waits.
   back.addEventListener('pointerdown', (e) => { if (e.target === back) e.preventDefault(); });
-  yes.addEventListener('click', () => on.yes());
-  no.addEventListener('click', () => on.no());
+  const list = doc.createElement('div');
+  list.className = 'mc-ask-choices';
+  list.hidden = true;
+  card.insertBefore(list, row);
+  // Choices mode: a pick handler; Yes/No mode: null.
+  let picker: ((i: number) => void) | null = null;
+  yes.addEventListener('click', () => { if (picker) picker(0); else on.yes(); });
+  no.addEventListener('click', () => { if (picker) picker(-1); else on.no(); });
+  const YES_NO_HINT = 'Right thumbs up for yes, thumbs down for no. Or just say it.';
   return {
     show(question, labels = {}) {
+      picker = null; list.hidden = true; list.innerHTML = '';
+      if (yes.parentElement !== row) row.append(yes);
       q.textContent = question;
       yes.textContent = labels.yes ?? 'Yes';
       no.textContent = labels.no ?? 'No';
+      hint.textContent = YES_NO_HINT;
       back.hidden = false;
       try { yes.focus({ preventScroll: true }); } catch { /* jsdom */ }
     },
-    hide() { back.hidden = true; },
+    showChoices(question, labels, elseLabel, onPick) {
+      picker = onPick;
+      q.textContent = question;
+      list.innerHTML = '';
+      // The first choice is the thumbs-up button, at the top of the list.
+      yes.textContent = labels[0] ?? 'Yes';
+      list.append(yes);
+      labels.slice(1).forEach((l, k) => {
+        const b = doc.createElement('button');
+        b.type = 'button'; b.className = 'mc-btn mc-ask-choice'; b.textContent = l;
+        b.addEventListener('click', () => picker?.(k + 1));
+        list.append(b);
+      });
+      list.hidden = false;
+      no.textContent = elseLabel;
+      hint.textContent = 'Tap one or say it. Right thumbs up picks the first, thumbs down: something else.';
+      back.hidden = false;
+      try { yes.focus({ preventScroll: true }); } catch { /* jsdom */ }
+    },
+    hide() { back.hidden = true; picker = null; },
     isOpen: () => !back.hidden,
   };
 }
