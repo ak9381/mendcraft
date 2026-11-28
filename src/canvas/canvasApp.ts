@@ -3759,7 +3759,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // once: a point whose question was pending already booked them).
     bookPointSends(r, o);
     panels.forEngine(engine).log('note', `${o.sim ? 'SIM · ' : ''}${receipt.line}`);
+    // The point is over (whatever the answer): close the turn, so the monitor
+    // never shows this laptop's Nano lane stuck on "Working".
+    closePointTurn(r ? `${r.identity.label} · ${r.source === 'cloud' ? 'identified by Gemini' : 'identified on device'}` : 'nothing recognised');
   }
+  /** End a point turn in the feed: the laptop asked; the answer is in. */
+  function closePointTurn(line: string): void { panels.forEngine('nano').log('done', `point: ${line}`); }
   /** Her answer to the clarifying question; anything else drops it (and
    *  books what already left) and routes normally. */
   function handlePointChoice(text: string): boolean {
@@ -3788,7 +3793,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (iphonePoint) clearTimeout(iphonePoint.timer);
       iphonePoint = {
         frameId,
-        timer: setTimeout(() => { if (iphonePoint?.frameId === frameId) { iphonePoint = null; say('The iPhone didn’t send a photo — say it again, or name the device.'); } }, POINT_WAIT_MS + 8000),
+        timer: setTimeout(() => { if (iphonePoint?.frameId === frameId) { iphonePoint = null; closePointTurn('no photo from the iPhone'); say('The iPhone didn’t send a photo — say it again, or name the device.'); } }, POINT_WAIT_MS + 8000),
       };
       say(PHONE_POINT_LINE);
       void hostSession.askSensePoint('ios').catch(() => { iphonePoint = null; say('Couldn’t reach the iPhone — say it again, or name the device.'); });
@@ -3935,7 +3940,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       void pointTurn(wait.frameId, { skipIphone: true });
       return;
     }
-    if (!res.ok) { say(res.message || 'The iPhone couldn’t identify that — name the device instead.'); return; }
+    if (!res.ok) { const m = res.message || 'The iPhone couldn’t identify that — name the device instead.'; closePointTurn(m); say(m); return; }
     // Nothing crossed from THIS laptop: the photo stayed on the iPhone (its own
     // ledger + monitor tab books any crop it sent to Gemini).
     void finishPoint(wait.frameId, { identity: res.identity, source: res.source, ms: res.ms }, { cropBytes: 0, sim: false, cloudSends: 0, prompt: '', viaIphone: true });
