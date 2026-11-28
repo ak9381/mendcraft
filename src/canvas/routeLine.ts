@@ -110,7 +110,7 @@ const ADD_TO_BOARD_RE = /\badd\b[^.?!]*\b(dashboards?|control\s+panels?|remote\s
 // board 2" are navigation (or chat) unless they say dashboard or a new board.
 const SHOW_ME_BOARD_RE = /\bshow\s+me\b[^.?!]*\b(dashboards?|(?:a|an|new)\s+(?:\w+\s+){0,3}board)\b/i;
 /** "add the gimbal", "add gimbal controls", "show the gimbal tile", "gimbal controls". */
-const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?gimbal(?:\s+(?:controls?|tile|buttons?))?(?:\s+(?:here|(?:on|to)\s+(?:the|this|my)\s+(?:board|dashboard)))?|(?:the\s+)?gimbal\s+controls?)(?:\s+please)?\s*[.!?]*\s*$/i;
+const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me|connect|pair|link|set\s+up|hook\s+up)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+|our\s+)?(?:iphone\s+(?:to|on)\s+(?:the\s+|my\s+)?)?gimbal(?:\s+stand)?(?:\s+(?:controls?|tile|buttons?))?(?:\s+(?:here|(?:on|to)\s+(?:the|this|my)\s+(?:board|dashboard)))?|(?:the\s+)?gimbal\s+controls?)(?:\s+please)?\s*[.!?]*\s*$/i;
 /** "add the gimbal": the canvas asks two questions before the board turn. */
 export function isAddGimbalAsk(text: string): boolean { return ADD_GIMBAL_RE.test(text); }
 /** "show my devices", "list the connected devices", "what's connected?". */

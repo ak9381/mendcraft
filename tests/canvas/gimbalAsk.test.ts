@@ -62,3 +62,13 @@ describe('gimbalAsk', () => {
     expect(ran).toEqual([]);
   });
 });
+
+import { isAddGimbalAsk } from '../../src/canvas/routeLine';
+describe('gimbal ask phrases', () => {
+  it('connect / pair / set up the gimbal start the ask like add the gimbal', () => {
+    for (const t of ['add the gimbal', 'connect gimbal', 'Connect the gimbal.', 'connect my gimbal', 'pair the gimbal', 'set up the gimbal', 'connect the iPhone to the gimbal', 'connect gimbal please']) {
+      expect(isAddGimbalAsk(t), t).toBe(true);
+    }
+    for (const t of ['connect the lamp', 'connect my iphone', 'follow me']) expect(isAddGimbalAsk(t), t).toBe(false);
+  });
+});
