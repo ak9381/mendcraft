@@ -64,6 +64,17 @@ function actionProblem(raw: unknown, i: number): string | null {
   return null;
 }
 
+const KIND_SAME: Record<string, string> = {
+  light: 'smart-bulb', bulb: 'smart-bulb', lamp: 'smart-bulb', 'smart-light': 'smart-bulb', 'smart-lamp': 'smart-bulb', 'smart-bulb': 'smart-bulb',
+  'wifi-bulb': 'smart-bulb', 'wi-fi-bulb': 'smart-bulb', 'led-bulb': 'smart-bulb', 'light-bulb': 'smart-bulb', 'smart-light-bulb': 'smart-bulb',
+  'wifi-light': 'smart-bulb', 'color-bulb': 'smart-bulb', 'colour-bulb': 'smart-bulb',
+};
+/** "brand|kind" with the brand's WiZ variants and the bulb's other names folded. */
+export function sameDeviceKey(key: string): string {
+  const [b = '', k = ''] = key.split('|');
+  return `${/(^|-)wiz(-|$)/.test(b) ? 'wiz' : b}|${KIND_SAME[k] ?? k}`;
+}
+
 /** Check a connector reply. Strict: one action that fails its check refuses
  *  the whole connector (a reviewed connector is exactly what runs). With
  *  `expectKey`, a connector for another brand or kind is refused too. */
@@ -81,7 +92,12 @@ export function parseConnectorReply(text: string, expectKey?: string): Coerced<{
   const connector = coerceConnector(rc, 'cloud');
   if (!connector) return bad('the connector failed its check');
   if (connector.actions.length !== rc.actions.length) return bad(`${rc.actions.length - connector.actions.length} of its actions failed their check`);
-  if (expectKey && connector.key !== expectKey) return bad(`it is written for a ${connector.brand} ${connector.deviceKind}, not this lamp`);
+  if (expectKey && connector.key !== expectKey) {
+    // The same device said another way ("WiZ light", "WiZ Connected bulb")
+    // is this lamp: it is filed under the lamp's key. Another brand or kind is refused.
+    if (sameDeviceKey(connector.key) !== sameDeviceKey(expectKey)) return bad(`it is written for a ${connector.brand} ${connector.deviceKind}, not this lamp`);
+    connector.key = expectKey;
+  }
   const { map, dropped } = coerceIntentMapNotes(raw.intents, connector);
   if (!Object.keys(map).length) return bad('its intent map names no action the connector has');
   return { ok: true, value: { connector, intents: map }, ...(dropped.length ? { notes: dropped.map((d) => `Left out of the intent map: ${d}.`) } : {}) };
