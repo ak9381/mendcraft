@@ -3,20 +3,34 @@ import { registerServiceWorker } from '../src/offline/registerSw';
 
 function fakeWin(native: boolean | undefined) {
   const register = vi.fn(async () => ({}));
+  const rootUnregister = vi.fn(async () => true);
+  const canvasUnregister = vi.fn(async () => true);
+  const getRegistrations = vi.fn(async () => [
+    { scope: 'https://mendcraft.web.app/', unregister: rootUnregister },
+    { scope: 'https://mendcraft.web.app/canvas', unregister: canvasUnregister },
+  ]);
   const win = {
-    navigator: { serviceWorker: { register } },
+    location: { origin: 'https://mendcraft.web.app' },
+    navigator: { serviceWorker: { register, getRegistrations } },
     document: { readyState: 'complete' },
     addEventListener: vi.fn(),
     ...(native === undefined ? {} : { Capacitor: { isNativePlatform: () => native } }),
   } as unknown as Window;
-  return { win, register };
+  return { win, register, rootUnregister, canvasUnregister };
 }
 
 describe('registerServiceWorker', () => {
-  it('registers /sw.js in a production web page', () => {
+  it('registers /sw.js for the canvas only, so other pages never wait on the worker', () => {
     const { win, register } = fakeWin(undefined);
     registerServiceWorker(win, true);
-    expect(register).toHaveBeenCalledWith('/sw.js');
+    expect(register).toHaveBeenCalledWith('/sw.js', { scope: '/canvas' });
+  });
+  it('removes an older whole-site registration and keeps the canvas one', async () => {
+    const { win, rootUnregister, canvasUnregister } = fakeWin(undefined);
+    registerServiceWorker(win, true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(rootUnregister).toHaveBeenCalledTimes(1);
+    expect(canvasUnregister).not.toHaveBeenCalled();
   });
   it('is a no-op inside the Capacitor native shell', () => {
     const { win, register } = fakeWin(true);

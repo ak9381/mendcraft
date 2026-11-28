@@ -15,7 +15,16 @@ export function registerServiceWorker(win: Window = window, prod: boolean = impo
   if (isNativeShell(win)) return;
   const nav = win.navigator;
   if (!('serviceWorker' in nav)) return;
-  const go = () => { void nav.serviceWorker.register('/sw.js').catch(() => undefined); };
+  // Scope /canvas: only the canvas page (and its assets) goes through the
+  // worker. Other pages (the AI monitor, AI activity, home) never wait on a
+  // cold worker start. An older whole-site ('/') registration is removed.
+  const go = () => {
+    void nav.serviceWorker.register('/sw.js', { scope: '/canvas' }).catch(() => undefined);
+    const rootScope = `${win.location?.origin ?? ''}/`;
+    void nav.serviceWorker.getRegistrations?.()
+      .then((regs) => Promise.all(regs.filter((r) => r.scope === rootScope).map((r) => r.unregister())))
+      .catch(() => undefined);
+  };
   if (win.document.readyState === 'complete') go();
   else win.addEventListener('load', go, { once: true });
 }
