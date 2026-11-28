@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  boardSendLine, createBoardEdgeTransferController, createSentBoardMemo, pairedEdgeLayout,
+  boardSendLine, coercePinIds, createBoardEdgeTransferController, createSentBoardMemo, pairedEdgeLayout,
   type BoardSend, type EdgeGlow,
 } from '../../src/canvas/edgeTransfer';
 import { attachBoardDrag } from '../../src/canvas/boardDrag';
@@ -267,6 +267,41 @@ describe('createSentBoardMemo', () => {
     const m = createSentBoardMemo();
     m.remember({ boardFor: 'android', board: BOARD }, 'f1', focus);
     expect(m.current('f2', null)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
+  });
+});
+
+describe('createSentBoardMemo — one pin per phone', () => {
+  const OTHER = { kind: 'room', title: 'Other', tiles: [] } as unknown as SurfacePlan;
+  it('each phone keeps its own pin; current() is the newest', () => {
+    const m = createSentBoardMemo();
+    expect(m.pins()).toEqual({ ios: null, android: null });
+    m.remember({ boardFor: 'android', board: BOARD, frameId: 'f1' }, 'f1', null);
+    m.remember({ boardFor: 'ios', board: OTHER, frameId: 'f2' }, 'f2', null);
+    expect(m.pins()).toEqual({ ios: 'f2', android: 'f1' });
+    expect(m.pinFor('android')?.board).toBe(BOARD);
+    expect(m.current('f9', null)).toEqual({ board: OTHER, boardFor: 'ios', frameId: 'f2' });
+    expect(m.all().map((p) => p.boardFor)).toEqual(['android', 'ios']);
+  });
+  it('clear takes one phone\'s pin off; the other stays', () => {
+    const m = createSentBoardMemo();
+    m.remember({ boardFor: 'android', board: BOARD, frameId: 'f1' }, 'f1', null);
+    m.remember({ boardFor: 'ios', board: OTHER, frameId: 'f2' }, 'f2', null);
+    m.clear('ios');
+    expect(m.pins()).toEqual({ ios: null, android: 'f1' });
+    expect(m.current('f9', null)).toEqual({ board: BOARD, boardFor: 'android', frameId: 'f1' });
+    m.clear('android');
+    expect(m.current('f9', null)).toEqual({ board: null, frameId: 'f9' });
+  });
+  it('sending the same board to the other phone moves its pin', () => {
+    const m = createSentBoardMemo();
+    m.remember({ boardFor: 'android', board: BOARD, frameId: 'f1' }, 'f1', null);
+    m.remember({ boardFor: 'ios', board: BOARD, frameId: 'f1' }, 'f1', null);
+    expect(m.pins()).toEqual({ ios: 'f1', android: null });
+  });
+  it('stored pins are checked (junk reads as none)', () => {
+    expect(coercePinIds({ ios: 'f2', android: 'bad id!' })).toEqual({ ios: 'f2', android: null });
+    expect(coercePinIds(null)).toEqual({ ios: null, android: null });
+    expect(coercePinIds('f1')).toEqual({ ios: null, android: null });
   });
 });
 

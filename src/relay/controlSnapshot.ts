@@ -218,6 +218,13 @@ export interface ControlSnapshot {
    *  doc), BESIDE the surface plan — never inside it. Each doc sanitized,
    *  only ids `board` has, size-capped (planDocs.coerceBoardDrawings). */
   boardDrawings?: Record<string, Record<string, unknown>>;
+  /** Which board (frame id) is pinned on each phone right now; null = that
+   *  phone holds no board from this laptop (it takes received boards off).
+   *  Absent from an old laptop: the phone keeps today's behaviour. */
+  pins?: { ios: string | null; android: string | null };
+  /** The pin id the carried `board` belongs to (a phone only takes a board
+   *  whose boardPin is its own pin). */
+  boardPin?: string;
   /** The most recent committed tile transfer (for the enter-from-edge animation). */
   transfer?: TransferMarker;
   omitted: SnapshotOmissions;
@@ -264,6 +271,10 @@ export interface ControlSnapshotInput {
   boardSend?: unknown;
   /** Drawings for `board`'s plan tiles (re-sanitized; dropped if invalid). */
   boardDrawings?: unknown;
+  /** Pinned board per phone (ids checked; anything else reads as null). */
+  pins?: unknown;
+  /** The pin id `board` belongs to (checked; dropped without a board). */
+  boardPin?: unknown;
   /** Drawings the SENDER already left out (a rebuilt wire snapshot keeps
    *  the count, so the phone can say so). */
   omittedDrawings?: unknown;
@@ -411,6 +422,8 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ? { id: bsIn.id, at: Math.round(bsIn.at), ...((bsIn as { replay?: unknown }).replay === true ? { replay: true as const } : {}) } : null;
   const bd = board && input.boardDrawings !== undefined ? coerceBoardDrawings(input.boardDrawings, board) : { drawings: {}, dropped: 0 };
   const boardDrawings = Object.keys(bd.drawings).length ? bd.drawings : null;
+  const pins = input.pins !== undefined && input.pins !== null ? coercePins(input.pins) : null;
+  const boardPin = board && typeof input.boardPin === 'string' && PIN_RE.test(input.boardPin) ? input.boardPin : null;
 
   const snap: ControlSnapshot = {
     v: SNAPSHOT_VERSION,
@@ -431,6 +444,8 @@ export function buildControlSnapshot(input: ControlSnapshotInput): ControlSnapsh
     ...(boardBy ? { boardBy } : {}),
     ...(boardSend ? { boardSend } : {}),
     ...(boardDrawings ? { boardDrawings } : {}),
+    ...(pins ? { pins } : {}),
+    ...(boardPin ? { boardPin } : {}),
     ...(transfer ? { transfer } : {}),
     omitted: {
       aiFeed: ai.dropped,
@@ -645,9 +660,20 @@ export function coerceSnapshot(raw: unknown): ControlSnapshot | null {
     boardBy: r.boardBy,
     boardSend: r.boardSend,
     boardDrawings: r.boardDrawings,
+    pins: r.pins,
+    boardPin: r.boardPin,
     omittedDrawings: (r.omitted as { drawings?: unknown } | undefined)?.drawings,
     transfer: (r.transfer ?? null) as ControlSnapshotInput['transfer'],
   });
+}
+
+const PIN_RE = /^[\w-]{1,40}$/;
+/** Pins off the wire: each phone's id checked, anything else null. */
+function coercePins(raw: unknown): { ios: string | null; android: string | null } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const one = (v: unknown): string | null => (typeof v === 'string' && PIN_RE.test(v) ? v : null);
+  return { ios: one(o.ios), android: one(o.android) };
 }
 
 /** The host re-publishes its last snapshot when a phone or dashboard says

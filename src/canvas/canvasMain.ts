@@ -4,7 +4,7 @@ import './canvas.css';
 import { mountCanvas } from './canvasApp';
 import { autoHandsFromSearch } from './canvasHands';
 import { isPhoneCanvasShell } from './iphoneShell';
-import { applyGuestSnapshot, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
+import { applyGuestSnapshot, createSnapshotOrder, phoneRouteBadge, startPhoneLookToEdit } from './phoneCanvasRuntime';
 import { createArrivalGate } from './boardGlow';
 import { createLaptopLink, mountLaptopLinkUi } from './laptopLink';
 import { createPhoneCamera, IPHONE_CAMERA_CONSTRAINTS, phoneHandsAllowed, phoneSensingAllowed } from './phoneCamera';
@@ -445,6 +445,7 @@ afterFirstPaint(() => {
     // A board the laptop really sent lights up once ("Moved from laptop");
     // the gate remembers the last send, so replays and reloads stay quiet.
     const arrival = { gate: createArrivalGate((() => { try { return localStorage; } catch { return null; } })()), now: () => Date.now() };
+    const order = createSnapshotOrder();
     let ui: { update(): void } | null = null;
     const link = createLaptopLink({
       storage: (() => { try { return localStorage; } catch { return null; } })(),
@@ -453,7 +454,11 @@ afterFirstPaint(() => {
       sim,
       aiForwarder: phoneAiFeed,
       // A snapshot buffered for a late listener is age-checked; a live one is not.
-      onSnapshot: (snap, meta) => { applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, { ...arrival, buffered: !!meta?.buffered }); },
+      // A replayed/buffered snapshot older than the newest seen never acts.
+      onSnapshot: (snap, meta) => {
+        if (!order.accept(snap, { buffered: !!meta?.buffered })) return;
+        applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, { ...arrival, buffered: !!meta?.buffered }, () => { h.clearRemoteBoards(); });
+      },
       onChange: () => ui?.update(),
       onSession: (s) => {
         guestSession = s;
@@ -486,7 +491,7 @@ afterFirstPaint(() => {
     if (sim && (import.meta.env.DEV || import.meta.env.VITE_E2E === '1')) {
       (window as unknown as { __mcGuestSnapshot?: (raw: unknown) => boolean }).__mcGuestSnapshot = (raw) => {
         const snap = coerceSnapshot(raw);
-        return !!snap && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, arrival);
+        return !!snap && order.accept(snap) && applyGuestSnapshot(snap, h.showRemoteBoard, phonePlatform, h.say, arrival, () => { h.clearRemoteBoards(); });
       };
     }
     ui = mountLaptopLinkUi(root, link, { sim, hasBoard: () => h.frames().length > 0 });

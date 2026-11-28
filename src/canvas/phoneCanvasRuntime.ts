@@ -42,7 +42,7 @@ export function phoneRouteBadge(input: PhoneRouteBadgeInput): string {
 export const BOARD_NO_MAKER_LINE = "Couldn't take the board — it doesn't say who made it. Nothing changed.";
 
 export function applyGuestSnapshot(
-  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy' | 'boardSend'> & { omitted?: { drawings?: number } },
+  snap: Pick<ControlSnapshot, 'board' | 'boardFor' | 'boardDrawings' | 'boardBy' | 'boardSend' | 'pins' | 'boardPin'> & { omitted?: { drawings?: number } },
   showBoard: (plan: SurfacePlan, boardDrawings?: ControlSnapshot['boardDrawings'], info?: { drawingsOmitted?: number; by?: ControlSnapshot['boardBy']; arrived?: boolean }) => void,
   platform?: PhonePlatform,
   onRefuse?: (line: string) => void,
@@ -50,10 +50,19 @@ export function applyGuestSnapshot(
    *  buffered snapshot (replayed to a late listener: `buffered`) is
    *  age-checked; a live one is not, so a skewed clock never misses a send. */
   arrival?: { gate: ArrivalGate; now: () => number; buffered?: boolean },
+  /** The laptop says this phone holds no board of its (pins[platform] is
+   *  null: it was brought back, or never sent): take received boards off. */
+  clearBoards?: () => void,
 ): boolean {
+  // An old laptop sends no pins: today's behaviour (a board-less snapshot
+  // changes nothing).
+  const pin = snap.pins && platform ? snap.pins[platform] : undefined;
+  if (pin === null) { clearBoards?.(); return false; }
   if (!snap.board) return false;
   // A board sent to the OTHER phone is not for us.
   if (snap.boardFor && snap.boardFor !== platform) return false;
+  // Only the board pinned on this phone (never a stale one from another pin).
+  if (snap.pins && snap.boardPin !== pin) return false;
   // A board is kept under the name of whoever made it: no maker, no board.
   if (!snap.boardBy) { onRefuse?.(BOARD_NO_MAKER_LINE); return false; }
   // The board's current plan drawings ride with it (the phone re-checks them).
@@ -63,6 +72,24 @@ export function applyGuestSnapshot(
   const arrived = !!arrival && arrival.gate.isNew(snap, platform, arrival.now(), { live: !arrival.buffered });
   showBoard(snap.board, snap.boardDrawings ?? {}, { ...(omitted > 0 ? { drawingsOmitted: omitted } : {}), by: snap.boardBy, ...(arrived ? { arrived } : {}) });
   return true;
+}
+
+/**
+ * Phone: the order of the laptop's snapshots. A live snapshot is always taken
+ * (a reloaded laptop counts its revs from 1 again); a replayed or buffered
+ * one older than the newest seen is refused, so history never brings back a
+ * board that was since brought back or moved.
+ */
+export function createSnapshotOrder(): { accept(snap: Pick<ControlSnapshot, 'rev' | 'boardSend'>, o?: { buffered?: boolean }): boolean } {
+  let newest = -Infinity;
+  return {
+    accept(snap, o = {}) {
+      const replay = !!o.buffered || snap.boardSend?.replay === true;
+      if (replay && snap.rev < newest) return false;
+      if (!replay || snap.rev > newest) newest = snap.rev;
+      return true;
+    },
+  };
 }
 
 export function startPhoneLookToEdit(

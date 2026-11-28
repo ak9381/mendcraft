@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyGuestSnapshot, BOARD_NO_MAKER_LINE, phoneRouteBadge } from '../../src/canvas/phoneCanvasRuntime';
+import { applyGuestSnapshot, BOARD_NO_MAKER_LINE, createSnapshotOrder, phoneRouteBadge } from '../../src/canvas/phoneCanvasRuntime';
 import type { SurfacePlan } from '../../src/canvas/surfacePlan';
 import { buildControlSnapshot, coerceSnapshot } from '../../src/relay/controlSnapshot';
 
@@ -79,5 +79,61 @@ describe('phoneRouteBadge — why Apple is not on device', () => {
   it('stays plain when ready or no reason is known', () => {
     expect(phoneRouteBadge({ ...base, appleReady: true, appleReason: 'available' })).toBe('Apple · on device');
     expect(phoneRouteBadge(base)).toBe('Gemini · cloud');
+  });
+});
+
+describe('applyGuestSnapshot — pins', () => {
+  const by = 'gemini' as const;
+  it('pins[platform] null takes the received boards off; nothing is shown', () => {
+    const show = vi.fn();
+    const clear = vi.fn();
+    expect(applyGuestSnapshot({ pins: { ios: null, android: 'f1' } }, show, 'ios', undefined, undefined, clear)).toBe(false);
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(show).not.toHaveBeenCalled();
+    // The other phone, still pinned, keeps its board.
+    const clearA = vi.fn();
+    expect(applyGuestSnapshot({ pins: { ios: null, android: 'f1' } }, show, 'android', undefined, undefined, clearA)).toBe(false);
+    expect(clearA).not.toHaveBeenCalled();
+  });
+  it('a board is taken only when it is this phone\'s pin', () => {
+    const show = vi.fn();
+    const clear = vi.fn();
+    expect(applyGuestSnapshot({ board, boardFor: 'android', boardBy: by, pins: { ios: null, android: 'f2' }, boardPin: 'f1' }, show, 'android', undefined, undefined, clear)).toBe(false);
+    expect(show).not.toHaveBeenCalled();
+    expect(applyGuestSnapshot({ board, boardFor: 'android', boardBy: by, pins: { ios: null, android: 'f2' }, boardPin: 'f2' }, show, 'android', undefined, undefined, clear)).toBe(true);
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(clear).not.toHaveBeenCalled();
+  });
+  it('an old laptop (no pins): a board-less snapshot changes nothing, a board shows as before', () => {
+    const show = vi.fn();
+    const clear = vi.fn();
+    expect(applyGuestSnapshot({}, show, 'ios', undefined, undefined, clear)).toBe(false);
+    expect(applyGuestSnapshot({ board, boardBy: by }, show, 'ios', undefined, undefined, clear)).toBe(true);
+    expect(clear).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSnapshotOrder — history never acts', () => {
+  it('a replayed older snapshot is refused; a live one always acts (a reloaded laptop counts from 1)', () => {
+    const o = createSnapshotOrder();
+    expect(o.accept({ rev: 5 })).toBe(true);
+    expect(o.accept({ rev: 3 }, { buffered: true })).toBe(false);
+    expect(o.accept({ rev: 4, boardSend: { id: 'a', at: 1, replay: true } })).toBe(false);
+    expect(o.accept({ rev: 5 }, { buffered: true })).toBe(true); // the newest, replayed on hello
+    expect(o.accept({ rev: 1 })).toBe(true); // the laptop reloaded
+    expect(o.accept({ rev: 2 }, { buffered: true })).toBe(true);
+  });
+  it('a replay older than the newest pins never brings an old board back (end to end through applyGuestSnapshot)', () => {
+    const o = createSnapshotOrder();
+    const show = vi.fn();
+    const clear = vi.fn();
+    const sent = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 1, board: { ...board, tiles: [{ type: 'stat', label: 'A', value: '1' }] }, boardFor: 'ios', boardBy: 'gemini', pins: { ios: 'f1', android: null }, boardPin: 'f1', boardSend: { id: 's1', at: 1 } }))))!;
+    const back = coerceSnapshot(JSON.parse(JSON.stringify(buildControlSnapshot({ rev: 2, pins: { ios: null, android: null } }))))!;
+    const apply = (s: typeof sent, buffered = false) => o.accept(s, { buffered }) && applyGuestSnapshot(s, show, 'ios', undefined, undefined, clear);
+    expect(apply(sent)).toBe(true);
+    expect(apply(back)).toBe(false);
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(apply({ ...sent, boardSend: { ...sent.boardSend!, replay: true } })).toBe(false);
+    expect(show).toHaveBeenCalledTimes(1);
   });
 });

@@ -286,33 +286,73 @@ export function pairedEdgeLayout(
 }
 
 /**
- * Host memory of the last board sent to ONE phone. Routine republishes (a
- * phone announcing, a layout swap, a phone rejoining) re-send THAT board with
- * its target instead of the laptop's focused board, so the phone keeps what was
- * sent to it — until the laptop's focused board changes (another board focused,
- * or the focused board edited), after which the focused board mirrors again.
+ * Host memory of the board pinned on EACH phone. Routine republishes (a phone
+ * announcing, a layout swap, a phone rejoining) re-send each phone's pinned
+ * board with its target instead of the laptop's focused board, so a phone
+ * keeps what was sent to it while she works on other boards here. A pin is
+ * cleared when the board is brought back (`clear`); the cleared state rides
+ * the snapshot (`pins`), so the phone takes that board off too.
  */
+export interface BoardPin { boardFor: PhonePlatform; board: SurfacePlan; frameId: string | null }
+export type PinIds = { ios: string | null; android: string | null };
+/** A pin id on the wire / in storage: a frame id. */
+export const PIN_ID_RE = /^[\w-]{1,40}$/;
+
 export interface SentBoardMemo {
   remember(sent: { boardFor: PhonePlatform; board: SurfacePlan; frameId?: string }, focusId: string | null, focusPlan: SurfacePlan | null): void;
-  /** What a routine republish should carry now. `frameId` = the board the
-   *  plan came from (its drawings ride along). */
+  /** The most recent pin a routine republish carries (or none). `frameId` =
+   *  the board the plan came from (its drawings ride along). */
   current(focusId: string | null, focusPlan: SurfacePlan | null): { board: SurfacePlan | null; boardFor?: PhonePlatform; frameId: string | null };
+  /** Take the pin off one phone (the board came back). */
+  clear(platform: PhonePlatform): void;
+  pinFor(platform: PhonePlatform): BoardPin | null;
+  /** Which board (frame id) is pinned on each phone now. */
+  pins(): PinIds;
+  /** Every pin, oldest first. */
+  all(): BoardPin[];
 }
 
 export function createSentBoardMemo(): SentBoardMemo {
-  let last: { boardFor: PhonePlatform; board: SurfacePlan; frameId?: string; focusId: string | null; focusPlan: SurfacePlan | null } | null = null;
+  // Insertion order = send order (the newest is last).
+  const pinned = new Map<PhonePlatform, BoardPin>();
   return {
-    remember(sent, focusId, focusPlan) { last = { ...sent, focusId, focusPlan }; },
+    remember(sent, focusId, focusPlan) {
+      void focusPlan;
+      const frameId = sent.frameId ?? focusId ?? null;
+      // A board is on one phone at a time: sending it to the other phone moves it.
+      for (const [p, pin] of pinned) if (frameId && pin.frameId === frameId && p !== sent.boardFor) pinned.delete(p);
+      pinned.delete(sent.boardFor);
+      pinned.set(sent.boardFor, { boardFor: sent.boardFor, board: sent.board, frameId });
+    },
     current(focusId, focusPlan) {
       // Extend, never mirror: a phone shows a board only after she sends one
       // there (drag to its edge / "send to"), and that board stays pinned on
-      // that phone while she works on other boards here, until she sends
-      // another. Nothing sent: no board goes.
+      // that phone while she works on other boards here. Nothing sent: no board goes.
       void focusPlan;
-      if (last) return { board: last.board, boardFor: last.boardFor, frameId: last.frameId ?? last.focusId ?? focusId };
+      const last = [...pinned.values()].at(-1);
+      if (last) return { board: last.board, boardFor: last.boardFor, frameId: last.frameId ?? focusId };
       return { board: null, frameId: focusId };
     },
+    clear(platform) { pinned.delete(platform); },
+    pinFor(platform) { return pinned.get(platform) ?? null; },
+    pins() {
+      const id = (p: PhonePlatform): string | null => {
+        const f = pinned.get(p)?.frameId;
+        return f && PIN_ID_RE.test(f) ? f : null;
+      };
+      return { ios: id('ios'), android: id('android') };
+    },
+    all() { return [...pinned.values()]; },
   };
+}
+
+/** Stored pins (localStorage `mc.relay.pins`): a laptop reload neither clears
+ *  nor forgets a phone's board. Anything malformed reads as no pins. */
+export const PINS_KEY = 'mc.relay.pins';
+export function coercePinIds(raw: unknown): PinIds {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const one = (v: unknown): string | null => (typeof v === 'string' && PIN_ID_RE.test(v) ? v : null);
+  return { ios: one(o.ios), android: one(o.android) };
 }
 
 export const PHONE_NAME: Record<PhonePlatform, string> = { ios: 'iPhone', android: 'Nothing phone' };

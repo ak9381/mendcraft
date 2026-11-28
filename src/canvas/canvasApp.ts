@@ -40,7 +40,7 @@ import { mountConnectSheet, showPairing, type ConnectSheet, type PairingView } f
 import { startPhoneJoin } from './phoneJoin';
 import { dispatchRelayCommand } from './relayCommands';
 import { applySendGlow, flagArrived, flashSent, sendGlowView, type BoardSendMark, type GlowFrame } from './boardGlow';
-import { boardSendLine, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout } from './edgeTransfer';
+import { boardSendLine, coercePinIds, createBoardEdgeTransferController, createEdgeTransferController, createSentBoardMemo, pairedEdgeLayout, PINS_KEY } from './edgeTransfer';
 import { parseTransfer, removeTileFromPlan, tileFromPhone, type TileTransfer } from './tileTransfer';
 import { createAskOrigins } from './askOrigin';
 import { MAX_TILES } from './surfacePlan';
@@ -646,12 +646,36 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     republishCurrentBoard();
   }
 
-  // A board sent to one phone stays on that phone across routine republishes
-  // (announce, layout swap, rejoin) until the laptop's focused board changes.
+  // A board sent to a phone stays pinned on that phone across routine
+  // republishes (announce, layout swap, rejoin) until it is brought back or
+  // another board is sent there. The pins ride every snapshot (`pins`), and
+  // are kept in storage so a laptop reload neither clears nor forgets them.
   const sentBoard = createSentBoardMemo();
+  if (!phoneShell) {
+    try {
+      const saved = coercePinIds(JSON.parse(storage.getItem(PINS_KEY) ?? 'null'));
+      for (const p of ['android', 'ios'] as const) {
+        const id = saved[p];
+        if (id && reg.get(id) && surfaces[id]) sentBoard.remember({ boardFor: p, board: surfaces[id], frameId: id }, focusId, null);
+      }
+    } catch { /* private mode / junk: no pins */ }
+  }
+  function savePins(): void {
+    if (phoneShell) return;
+    try {
+      const p = sentBoard.pins();
+      if (p.ios || p.android) storage.setItem(PINS_KEY, JSON.stringify(p)); else storage.removeItem(PINS_KEY);
+    } catch { /* private mode */ }
+  }
+  /** One publish per pinned phone (its board, its target), or one board-less
+   *  publish when nothing is pinned — every one carries the current pins. */
   function republishCurrentBoard(): void {
-    const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
-    publishBoardTransfer(cur.frameId ?? focusId ?? '', cur.board, null, cur.boardFor);
+    const all = sentBoard.all();
+    if (!all.length) { publishBoardTransfer(focusId ?? '', null, null); return; }
+    for (const pin of all) {
+      const id = pin.frameId ?? '';
+      publishBoardTransfer(id, (id && surfaces[id]) || pin.board, null, pin.boardFor);
+    }
   }
   /** The board whose plan the phones hold now (last publish with a board). */
   let publishedFrame: string | null = null;
@@ -665,7 +689,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
    *  Undo): the phone holding that board gets the new drawing — the same
    *  republish (and the same target) as any other board update. */
   function planDrawingChanged(frameId: string): void {
-    if (!(hostSession || simWire) || frameId !== publishedFrame) return;
+    if (!(hostSession || simWire) || !sentBoard.all().some((p) => p.frameId === frameId)) return;
     planEditedFrames.add(frameId);
     if (planRepublishTimer) return;
     const now = Date.now();
@@ -674,11 +698,12 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       planRepublishAt = Date.now();
       const edited = new Set(planEditedFrames);
       planEditedFrames.clear();
-      // Only the board the phones hold now, with ITS target: never another
+      // Only a board a phone holds now, with ITS target: never another
       // board (B) to both phones because A's drawing changed.
-      const cur = sentBoard.current(focusId, focusId ? surfaces[focusId] ?? null : null);
-      if (!cur.board || !cur.frameId || !edited.has(cur.frameId)) return;
-      publishBoardTransfer(cur.frameId, cur.board, null, cur.boardFor);
+      for (const pin of sentBoard.all()) {
+        if (!pin.frameId || !edited.has(pin.frameId)) continue;
+        publishBoardTransfer(pin.frameId, pin.board, null, pin.boardFor);
+      }
     }, Math.max(250, planRepublishAt + PLAN_RESEND_MIN_MS - now));
   }
   /** "Couldn't send" is said once per failure run, not for every retry. */
@@ -751,6 +776,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         ...(boardBy ? { boardBy } : {}),
         ...(board && boardSend ? { boardSend } : {}),
         ...(boardDrawings && Object.keys(boardDrawings).length ? { boardDrawings } : {}),
+        // Every board snapshot says what each phone holds (null: nothing from
+        // here). A tile transfer keeps today's shape (no pins): both phones
+        // see the board the tile left, as before.
+        ...(t ? {} : { pins: sentBoard.pins() }),
+        ...(!t && board && boardFor && sentBoard.pins()[boardFor] ? { boardPin: sentBoard.pins()[boardFor] } : {}),
         ...(t ? { transfer: { componentId: t.componentId, to: t.to, enterEdge: t.enterEdge, rev: snapshotRev } } : {}),
       });
       publishedFrame = board ? frameId || null : publishedFrame;
@@ -974,6 +1004,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (hostSession || simWire) {
         // Only the phone on that side shows it (boardFor); the other ignores it.
         sentBoard.remember({ boardFor: s.target, board: s.board, frameId: s.frameId }, focusId, focusId ? surfaces[focusId] ?? null : null);
+        savePins();
         publishBoardTransfer(s.frameId, s.board, null, s.target, stamp);
       }
       const sentEl = frameById(s.frameId);
@@ -6795,10 +6826,30 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (focusId === id) focusId = null;
     if (lastFocus === id) lastFocus = null;
   }
+  /** A phone: the laptop says this phone holds none of its boards (brought
+   *  back, or moved to the other phone): every board received from the
+   *  laptop goes — frame, surface, drawings and (on save) its artifacts.
+   *  Boards she made here herself stay. Returns how many went. */
+  function clearRemoteBoards(): number {
+    if (!phoneShell) return 0;
+    const gone = [...receivedFrames].filter((id) => reg.get(id));
+    for (const id of [...receivedFrames]) if (!reg.get(id)) receivedFrames.delete(id);
+    if (!gone.length) return 0;
+    for (const id of gone) dropDuplicateBoard(id);
+    sync();
+    persist();
+    applyEditLock();
+    fitPhone();
+    return gone.length;
+  }
   function showRemoteBoard(plan: SurfacePlan, boardDrawings?: unknown, info: { drawingsOmitted?: number; by?: ArtifactBy; arrived?: boolean } = {}): void {
     // Each board once: a board that arrives again (replay on re-pair, a
     // republish) goes to the frame already showing it; other copies go.
-    const preferred = [focusId, lastFocus].find((x): x is string => !!x && !!reg.get(x)) ?? reg.list()[0]?.id ?? null;
+    // A board she made here is never written over: a new board from the
+    // laptop goes to a received (or empty) frame, else a new one — so taking
+    // the laptop's boards off later can never take hers.
+    const takeable = (x: string | null | undefined): x is string => !!x && !!reg.get(x) && (receivedFrames.has(x) || !surfaces[x]?.tiles.length);
+    const preferred = [focusId, lastFocus, reg.list()[0]?.id].find(takeable) ?? null;
     const target = remoteBoardTarget(reg.list(), surfaces, plan, preferred);
     for (const dup of target.duplicates) dropDuplicateBoard(dup);
     let id = target.id;
@@ -7342,7 +7393,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   function setTalkCaption(text: string | null): void { micFab?.setCaption(text); }
   function setTalkError(text: string): void { micFab?.setError(text); }
   return {
-    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, receivedBy, makerOf, isReceivedFrame: (frameId: string) => receivedFrames.has(frameId), sharedBoards: () => boardEdge.sharedBoards(), destroy,
+    run, focus, overview, save, keep, drop, undo, store, snapshot, history: () => history.list(), frames: () => reg.list(), setTalkCaption, setTalkError, setFacing, setRouteBadge, showRemoteBoard, clearRemoteBoards, receivedBy, makerOf, isReceivedFrame: (frameId: string) => receivedFrames.has(frameId), sharedBoards: () => boardEdge.sharedBoards(), destroy,
     /** Status lines said so far (a mark, then the lines said since it). */
     statusMark: () => statusBase + statusLog.length,
     /** Dev / test builds with ?sim=1 only: the gimbal relay messages a SIM run would have sent. */

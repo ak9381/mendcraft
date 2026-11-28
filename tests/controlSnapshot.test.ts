@@ -163,6 +163,29 @@ describe('coerceSnapshot — defensive rebuild of wire data', () => {
   });
 });
 
+describe('pins on the wire (which board each phone holds)', () => {
+  const BOARD = { kind: 'room', title: 'Status', tiles: [{ type: 'stat', label: 'Lamps', value: '2' }] };
+  it('carries pins and the board\'s pin id through a wire round trip', () => {
+    const built = buildControlSnapshot({ rev: 2, board: BOARD, boardFor: 'android', boardBy: 'gemini', pins: { ios: null, android: 'f3' }, boardPin: 'f3' });
+    expect(built.pins).toEqual({ ios: null, android: 'f3' });
+    expect(built.boardPin).toBe('f3');
+    const back = coerceSnapshot(JSON.parse(JSON.stringify(built)))!;
+    expect(back.pins).toEqual({ ios: null, android: 'f3' });
+    expect(back.boardPin).toBe('f3');
+  });
+  it('a bad pin id reads as null; a boardPin without a board is dropped', () => {
+    const snap = coerceSnapshot({ v: 1, rev: 1, pins: { ios: '<script>', android: 'x'.repeat(41), extra: 'f1' }, boardPin: 'f1' })!;
+    expect(snap.pins).toEqual({ ios: null, android: null });
+    expect(snap.boardPin).toBeUndefined();
+    expect(coerceSnapshot({ v: 1, rev: 1, pins: 'f1' })!.pins).toBeUndefined();
+  });
+  it('an old laptop\'s snapshot has no pins at all (the phone keeps today\'s behaviour)', () => {
+    const snap = coerceSnapshot({ v: 1, rev: 1, board: BOARD, boardBy: 'gemini' })!;
+    expect('pins' in snap).toBe(false);
+    expect('boardPin' in snap).toBe(false);
+  });
+});
+
 describe('controlDemoSnapshots — drives the dashboard', () => {
   it('shows a device switch, a cloud ledger call, a queued job, a caption, and a 3D scene', () => {
     const seq = controlDemoSnapshots();
