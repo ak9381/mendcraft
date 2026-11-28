@@ -39,3 +39,21 @@ export function devicesPlanFromNano(text: string): Coerced<SurfacePlan> {
   if (!title) return { ok: false, error: 'The reply had no usable title.' };
   return coerceSurfacePlan({ kind: 'room', title, tiles: [{ type: 'table', title: 'Devices', source: 'devices', fields: o.fields }] });
 }
+
+export const DEVICES_CONNECT_LABEL = 'Connect another device';
+/** The devices board always offers to connect one more (point, name, or a
+ *  phone): a Connect tile under the table unless the layout already has one. */
+export function withConnectAnother(plan: SurfacePlan): SurfacePlan {
+  const has = (tiles: readonly SurfacePlan['tiles'][number][]): boolean => tiles.some((t) => t.type === 'connect'
+    || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && has(t.children))
+    || (t.type === 'tabs' && t.tabs.some((tab) => has(tab.children)))
+    || (t.type === 'split' && (has(t.first) || has(t.second))));
+  return has(plan.tiles) ? plan : { ...plan, tiles: [...plan.tiles, { type: 'connect', label: DEVICES_CONNECT_LABEL }] };
+}
+
+/** A board that only holds what she connected (device tiles, the gimbal, a
+ *  Connect button, cards/rows of those): fine to become the devices board. */
+export function onlyConnectedTiles(tiles: readonly SurfacePlan['tiles'][number][]): boolean {
+  return tiles.every((t) => t.type === 'lamp' || t.type === 'switch' || t.type === 'music' || t.type === 'connect' || t.type === 'gimbal'
+    || ((t.type === 'row' || t.type === 'grid' || t.type === 'card') && onlyConnectedTiles(t.children)));
+}

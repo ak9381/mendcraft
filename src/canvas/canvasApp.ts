@@ -144,7 +144,7 @@ import { boardForJourney, isDevicesBoard, journeyStepOf, type JourneyStep } from
 import { coerceNextSteps, createNextStepChips, planExtraRan, plainStep, STEPS_CONSTRAINT, stepsEngine, stepsFactsSig, stepsPrompt, stepsStillFit, type NextChips, type ShownSteps } from './nextSteps';
 import { extractJson } from '../ai/cloudJson';
 import { ghostLeaves, ghostWords } from './ghostWords';
-import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt } from './devicesTurn';
+import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
@@ -3252,7 +3252,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
         say(NO_LIVE_TABLE_LINE, { speak: true });
         return;
       }
-      await proposePlan(frameId, utterance, out.plan, out.si, `Show your devices: ${out.plan.title}`, 'guess');
+      await proposePlan(frameId, utterance, withConnectAnother(out.plan), out.si, `Show your devices: ${out.plan.title}`, 'guess');
     } finally { turnBusy = false; kickLater(); lastTurnEndedAt = Date.now(); settleEngines(); autoHideAi(); }
   }
 
@@ -5491,6 +5491,11 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const existing = reg.list().find((f) => isDevicesBoard(surfaces[f.id]));
     if (existing) return existing.id;
     if (from && reg.get(from) && !surfaces[from]?.tiles.length && reg.get(from)?.kind !== 'plan') return from;
+    // "view it on this board": the board she is on, when it only holds what
+    // she connected (no dashboard, no floor plan); its device rows stay in the table.
+    if (from && reg.get(from) && reg.get(from)?.kind !== 'plan' && reg.get(from)?.title !== FLOOR_PLAN_TITLE
+      && surfaces[from]?.kind !== 'plan' && reg.get(from)?.title !== DASHBOARD_TITLE && surfaces[from]?.title !== DASHBOARD_TITLE
+      && onlyConnectedTiles(surfaces[from]?.tiles ?? [])) return from;
     return reg.add('note', DEVICES_TITLE).id;
   }
   /** Where "build the dashboard" / a room turn goes: the board she is on when

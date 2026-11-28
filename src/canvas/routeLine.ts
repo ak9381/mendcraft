@@ -118,7 +118,14 @@ const ADD_GIMBAL_RE = /^\s*(?:please\s+)?(?:(?:add|show|put|give\s+me|connect|pa
 export function isAddGimbalAsk(text: string): boolean { return ADD_GIMBAL_RE.test(text); }
 /** "show my devices", "list the connected devices", "what's connected?". */
 const SHOW_DEVICES_RE = /^\s*(?:please\s+)?(?:(?:show|list)\s+(?:me\s+)?(?:all\s+)?(?:(?:my|the|our)\s+)?(?:connected\s+)?devices|what(?:'|’)?s\s+connected|what\s+is\s+connected)(?:\s+please)?\s*[.!?]*\s*$/i;
-export const isShowDevices = (text: string): boolean => SHOW_DEVICES_RE.test(text);
+/** "build me a board to keep track of all my devices with their status",
+ *  "I want to see them on this board": the live devices board (status of
+ *  each connected device + connect another). Never the dashboard. */
+const DEVICES_BOARD_RE = /\b(?:build|make|create|give|set\s+up|show|put|draw|want)\b[^.?!]{0,40}\b(?:board|page|view|list|table|panel|screen)\b[^.?!]{0,90}\bdevices?\b/i;
+const DEVICES_SEE_RE = /\b(?:see|view|show|list|track)\s+(?:them|it|all\s+of\s+them|(?:all\s+)?(?:my|the|these|our)\s+devices)\s+on\s+(?:this|a|the|one)\s+board\b/i;
+const DEVICES_WHY_RE = /\b(?:track|status|statuses|connected|overview|monitor|see|view|list|show|what(?:'|’)?s\s+(?:on|connected))\b/i;
+export const isShowDevices = (text: string): boolean => SHOW_DEVICES_RE.test(text)
+  || (!/\bdash\s*-?board\b/i.test(text) && ((DEVICES_BOARD_RE.test(text) && DEVICES_WHY_RE.test(text)) || DEVICES_SEE_RE.test(text)));
 export function isBuildBoardAsk(text: string): boolean {
   return BUILD_BOARD_RE.test(text) || ADD_TO_BOARD_RE.test(text);
 }

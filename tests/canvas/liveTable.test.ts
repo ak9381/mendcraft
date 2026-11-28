@@ -75,7 +75,7 @@ describe('a live devices table', () => {
     const app = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     expect(app).toMatch(/const out = nano \? await nanoDevicesTurn\(utterance, nano\) :/);
     // Either way the reply goes through the same gate and the same review.
-    expect(app).toMatch(/if \(!isDevicesBoard\(out\.plan\)\) \{[\s\S]{0,300}await proposePlan\(frameId, utterance, out\.plan, out\.si/);
+    expect(app).toMatch(/if \(!isDevicesBoard\(out\.plan\)\) \{[\s\S]{0,300}await proposePlan\(frameId, utterance, withConnectAnother\(out\.plan\), out\.si/);
   });
 
   it('the devices reply fixture parses to a live board; its made-up rows and its ip field never survive', () => {
