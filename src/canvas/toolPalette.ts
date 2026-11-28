@@ -44,6 +44,12 @@ export function mountToolPalette(root: HTMLElement, win: Window = window, o: { o
     if (!moreBtn || !moreMenu) return;
     moreMenu.hidden = !on;
     moreBtn.setAttribute('aria-expanded', String(on));
+    // Fit the menu to the space under the bar (it scrolls inside when longer).
+    if (on) {
+      const top = moreMenu.getBoundingClientRect().top;
+      const room = win.innerHeight - top - 12;
+      if (top > 0 && room > 0) moreMenu.style.maxHeight = `${Math.max(200, Math.floor(room))}px`;
+    }
   }
   // Opening More while the palette is closed (a gesture or voice pressed the
   // hidden button) opens the palette too, so the menu is actually on screen.

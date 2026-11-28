@@ -338,7 +338,9 @@
 .mc-more-btn[aria-expanded=true] .mc-more-caret { transform: translateY(2px) rotate(-135deg); }
 .mc-more-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 52; display: grid; gap: 14px;
   min-width: 260px; padding: 14px; border-radius: 18px; background: var(--panel); border: 1px solid var(--border);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12); }
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.12);
+  /* Taller than a laptop screen: it scrolls inside, never off the bottom. */
+  max-height: calc(100dvh - 120px); overflow-y: auto; overscroll-behavior: contain; }
 .mc-more-group { display: flex; flex-direction: column; gap: 8px; }
 .mc-more-title { margin: 0 4px; font-size: 15px; font-weight: 650; color: var(--text-dim); }
 .mc-more-group > .mc-btn { width: 100%; text-align: left; padding: 0 16px; }
