@@ -57,6 +57,11 @@ export interface WizClient {
   getPilot(ip: string): Promise<LampState>;
   /** Apply an intent, then return the refreshed state (bridge re-reads). */
   setPilot(ip: string, intent: LampIntent): Promise<LampState | null>;
+  /** Backup voice: the laptop speaks `text` with macOS `say` (a new line
+   *  replaces the last; returns at once). True = it is speaking. Never throws. */
+  say?(text: string, o?: { voice?: string; rate?: number }): Promise<boolean>;
+  /** Stop the backup voice. Never throws. */
+  sayStop?(): Promise<void>;
 }
 
 /** Resolve the configured bridge URL: ?bridge= wins, then localStorage, then
@@ -176,6 +181,17 @@ export function createWizClient(
       const state = parsePilotResult((r as { result?: unknown })?.result ?? r);
       if (!state) throw new Error('bulb did not respond');
       return state;
+    },
+    async say(text, o = {}) {
+      try {
+        const r = (await call('/say', { text, ...(o.voice ? { voice: o.voice } : {}), ...(typeof o.rate === 'number' ? { rate: o.rate } : {}) })) as { ok?: unknown };
+        return r?.ok === true;
+      } catch {
+        return false;
+      }
+    },
+    async sayStop() {
+      try { await call('/say/stop', {}); } catch { /* bridge gone: nothing is speaking */ }
     },
     async setPilot(ip, intent) {
       const r = (await call('/setPilot', {

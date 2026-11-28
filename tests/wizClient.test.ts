@@ -63,3 +63,32 @@ describe('createWizClient token header', () => {
     }
   });
 });
+
+describe('createWizClient backup voice (/say)', () => {
+  it('say posts the text, voice and rate with the token; sayStop posts /say/stop', async () => {
+    const calls: { input: string; init?: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (input: string, init?: RequestInit) => {
+      calls.push({ input, init });
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    });
+    const client = createWizClient('http://127.0.0.1:38888/', fetchImpl, 'tok');
+    expect(await client.say!('Lamp on.', { voice: 'Samantha', rate: 171 })).toBe(true);
+    await client.sayStop!();
+    expect(calls.map((c) => [c.input, c.init?.method])).toEqual([
+      ['http://127.0.0.1:38888/say', 'POST'],
+      ['http://127.0.0.1:38888/say/stop', 'POST'],
+    ]);
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ text: 'Lamp on.', voice: 'Samantha', rate: 171 });
+    for (const c of calls) expect((c.init?.headers as Record<string, string>)['x-wiz-token']).toBe('tok');
+    // No voice / rate given: only the text goes.
+    await client.say!('Hi.');
+    expect(JSON.parse(String(calls[2].init?.body))).toEqual({ text: 'Hi.' });
+  });
+  it('never throws: an offline or refusing bridge is just false', async () => {
+    const down = createWizClient('http://x', async () => { throw new Error('refused'); }, 't');
+    expect(await down.say!('Hi.')).toBe(false);
+    await expect(down.sayStop!()).resolves.toBeUndefined();
+    const no = createWizClient('http://x', async () => ({ ok: false, status: 400, json: async () => ({ error: 'no text' }) }), 't');
+    expect(await no.say!('')).toBe(false);
+  });
+});

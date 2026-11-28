@@ -148,7 +148,7 @@ import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
-import { createSpeechGate, VOICE_STUCK_LINE } from '../ai/speechGate';
+import { createSpeechGate, VOICE_BACKUP_LINE, VOICE_STUCK_LINE } from '../ai/speechGate';
 import { cantDoYetLine, createTurnLog, createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, rootTurn, watchdogOutcome, type Outcome, type OutcomeKind, type Turn, type TurnRecord } from './turns';
 import { answersPrompt, CANCEL_RE, CANCELLED_LINE, createConversation, MODAL_PRIORITY } from './conversation';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
@@ -1369,7 +1369,14 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // The voice choice lives in the same store as the canvas (memory in a replay).
   const voiceStore = storage as Storage;
   // Chrome's speech can hang browser-wide: the gate below shows it on a chip.
-  const speaker = createSpeaker({ storage: voiceStore, onStuck: (stuck) => readAloudLines.setStuck(stuck) });
+  // Chrome's voice stuck: the Mac's own voice (`say`, through the local
+  // bridge) speaks instead until Chrome's starts again. No bridge: the chip
+  // says to relaunch Chrome, as before.
+  const backupVoice = opts.sim || phoneShell ? null : {
+    say: (text: string, o: { voice?: string; rate?: number }): Promise<boolean> => wizClient?.say?.(text, o) ?? Promise.resolve(false),
+    stop: (): void => { void wizClient?.sayStop?.(); },
+  };
+  const speaker = createSpeaker({ storage: voiceStore, onStuck: (stuck) => readAloudLines.setStuck(stuck), backup: backupVoice, onBackup: (on) => readAloudLines.setBackup(on) });
   let readAloud = loadReadAloud(voiceStore);
   // Only lines a caller opts in are spoken (ai/readAloud.ts): AI replies,
   // a review's title, a command's result or refusal, a pairing outcome.
@@ -1394,7 +1401,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!speechChip) return;
       speechChip.textContent = text ?? '';
       speechChip.hidden = !text;
-      speechChip.dataset.kind = text === VOICE_STUCK_LINE ? 'stuck' : 'off';
+      speechChip.dataset.kind = text === VOICE_STUCK_LINE || text === VOICE_BACKUP_LINE ? 'stuck' : 'off';
     },
     onFirstGesture: (f) => {
       if (typeof window === 'undefined') return;

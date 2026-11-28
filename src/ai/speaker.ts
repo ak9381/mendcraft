@@ -8,7 +8,7 @@ import {
 } from './speechVoices';
 
 export interface RawVoice { voiceURI: string; name: string; lang: string; localService?: boolean; default?: boolean }
-export interface UtteranceLike { text: string; rate: number; pitch: number; lang: string; voice: RawVoice | null; onstart?: (() => void) | null }
+export interface UtteranceLike { text: string; rate: number; pitch: number; lang: string; voice: RawVoice | null; onstart?: (() => void) | null; volume?: number }
 export interface SynthLike {
   getVoices(): RawVoice[];
   cancel(): void;
@@ -35,9 +35,21 @@ export interface SpeakerOptions {
    *  fires, even after a click). Called with true when that is seen, false
    *  once a line really starts again. */
   onStuck?: (stuck: boolean) => void;
+  /** A second voice for when Chrome's is stuck: the laptop's own (macOS
+   *  `say` through the local bridge). It says one line at a time (a new one
+   *  replaces the last) and returns at once; true = it is speaking. */
+  backup?: BackupVoice | null;
+  /** Called with true when the backup voice takes over, false when Chrome's
+   *  voice is back (or the backup could not speak). */
+  onBackup?: (on: boolean) => void;
   /** Timers (tests pass fakes). */
   setTimer?: (f: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
+}
+
+export interface BackupVoice {
+  say(text: string, o: { voice?: string; rate?: number }): Promise<boolean>;
+  stop(): void;
 }
 
 export interface Speaker {
@@ -91,6 +103,15 @@ export const VOICES_WAIT_MS = 3000;
  *  clicked: Chrome's speech is stuck. The queue is cancelled. */
 export const STUCK_MS = 8000;
 export const VOICE_STUCK_LINE = 'Voice is stuck in Chrome — relaunch Chrome to hear replies';
+/** The chip while the backup voice speaks for a stuck Chrome. */
+export const VOICE_BACKUP_LINE = "Voice: using the Mac's voice";
+/** While stuck, Chrome is tried again this often (a silent utterance). */
+export const PROBE_MS = 60_000;
+/** The backup cannot say when a line ends: the next queued sentence goes
+ *  after this estimate (15 characters a second, at least 1.2 s). */
+export const backupLineMs = (text: string): number => Math.max(1200, Math.round((text.length / 15) * 1000));
+/** SPEECH_RATE (1 = normal) → words a minute for `say` (180 normal), 120–260. */
+export const backupRate = (rate: number): number => Math.max(120, Math.min(260, Math.round(rate * 180)));
 
 function pageActivated(): boolean {
   const n = (globalThis as unknown as { navigator?: { userActivation?: { hasBeenActive?: boolean } } }).navigator;
@@ -120,9 +141,107 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
   };
   let watch: unknown = null;
   const unwatch = (): void => { if (watch !== null) { clearTimer(watch); watch = null; } };
+  const backup = opts.backup ?? null;
+  /** Lines handed to Chrome since one last started (what a stuck Chrome owes). */
+  let pendingLines: { text: string; o: SpeakOptions }[] = [];
+  /** The backup speaks now (stuck, and it said its first line). */
+  let backupOn = false;
+  /** This stuck spell, the backup failed: lines go to Chrome as before. */
+  let backupDown = false;
+  const fifo: { text: string; o: SpeakOptions }[] = [];
+  let fifoTimer: unknown = null;
+  let probeTimer: unknown = null;
+  const useBackup = (): boolean => !!backup && stuck && !backupDown;
+  function clearFifo(): void {
+    fifo.length = 0;
+    if (fifoTimer !== null) { clearTimer(fifoTimer); fifoTimer = null; }
+  }
+  function backupSay(line: { text: string; o: SpeakOptions }): void {
+    if (!backup) return;
+    const voice = backupVoiceName(line.o);
+    let p: Promise<boolean>;
+    try { p = backup.say(line.text, { ...(voice ? { voice } : {}), rate: backupRate(line.o.rate ?? SPEECH_RATE) }); } catch { p = Promise.resolve(false); }
+    void p.then((ok) => {
+      if (ok) {
+        if (!backupOn && stuck) { backupOn = true; opts.onBackup?.(true); }
+        line.o.onStart?.();
+      } else if (stuck && !backupDown) {
+        // The bridge is not there: this spell, Chrome keeps the lines (as before).
+        backupDown = true;
+        clearFifo();
+        if (backupOn) { backupOn = false; opts.onBackup?.(false); }
+      }
+    }, () => undefined);
+  }
+  /** One sentence now, the next after its estimated length (no queue in `say`). */
+  function drainFifo(): void {
+    fifoTimer = null;
+    const next = fifo.shift();
+    if (!next) return;
+    backupSay(next);
+    fifoTimer = setTimer(drainFifo, backupLineMs(next.text));
+  }
+  /** A fresh line on the backup: whatever it was saying stops; queued
+   *  sentences wait out this one's estimated length. */
+  function backupFresh(line: { text: string; o: SpeakOptions }, stopFirst: boolean): void {
+    clearFifo();
+    if (stopFirst) { try { backup!.stop(); } catch { /* gone */ } }
+    backupSay(line);
+    fifoTimer = setTimer(drainFifo, backupLineMs(line.text));
+  }
+  function backupEnqueue(line: { text: string; o: SpeakOptions }): void {
+    fifo.push(line);
+    if (fifoTimer === null) drainFifo();
+  }
+  /** Chrome's voice name, for `say -v`, only when it is a plain system name. */
+  function backupVoiceName(o: SpeakOptions): string | undefined {
+    const v = o.voice ?? voiceFor(o.lang ?? 'en-US');
+    const name = v ? raw().find((r) => r.voiceURI === v.voiceURI)?.name ?? '' : '';
+    return /^[A-Za-z]{2,20}$/.test(name) ? name : undefined;
+  }
+  function stopProbe(): void { if (probeTimer !== null) { clearTimer(probeTimer); probeTimer = null; } }
+  /** While stuck, try Chrome now and then with a silent line: if it starts,
+   *  Chrome's voice is back. */
+  function armProbe(): void {
+    stopProbe();
+    if (!backup || !synth) return;
+    probeTimer = setTimer(() => {
+      probeTimer = null;
+      if (!stuck) return;
+      try {
+        const u = make('.');
+        u.volume = 0;
+        u.rate = SPEECH_RATE;
+        u.pitch = SPEECH_PITCH;
+        u.lang = 'en-US';
+        u.onstart = () => { recover(); };
+        synth.speak(u);
+      } catch { /* try again next time */ }
+      armProbe();
+    }, PROBE_MS);
+  }
+  /** Chrome started a line while the backup had the voice: stop Chrome's late
+   *  (already said) lines, and Chrome speaks again from the next line on. */
+  function recover(): void {
+    if (!stuck) return;
+    try { synth?.cancel(); } catch { /* nothing playing */ }
+    const rest = fifo.splice(0);
+    clearFifo();
+    if (backupOn) { try { backup?.stop(); } catch { /* gone */ } }
+    stopProbe();
+    started();
+    for (const l of rest) speak(l.text, l.o, true);
+  }
   function started(): void {
     unwatch();
-    if (stuck) { stuck = false; opts.onStuck?.(false); }
+    pendingLines = [];
+    if (stuck) {
+      stuck = false;
+      backupDown = false;
+      stopProbe();
+      if (backupOn) { backupOn = false; opts.onBackup?.(false); }
+      opts.onStuck?.(false);
+    }
   }
   /** A fresh line must start soon: if not (and she has clicked), it is stuck. */
   function watchStart(): void {
@@ -133,6 +252,15 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
       // No cancel here: cancelling while Chrome is still loading a voice can
       // wedge its speech engine for the whole browser. Say so, change nothing.
       if (!stuck) { stuck = true; opts.onStuck?.(true); }
+      // The backup voice says what Chrome owes, once, and has the voice
+      // until Chrome starts a line again.
+      if (backup && !backupDown) {
+        const owed = pendingLines;
+        pendingLines = [];
+        const [first, ...rest] = owed;
+        if (first) { backupFresh(first, false); fifo.push(...rest); }
+        armProbe();
+      }
     }, STUCK_MS);
   }
 
@@ -155,6 +283,14 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     }
     // No voice for her language: stay silent rather than read it in the wrong one.
     if (!voiceSpeaks(match ? toSynthVoice(match) : null, lang) && (o.voice === undefined || o.voice === null)) return false;
+    // Chrome is stuck: the backup voice has it, and nothing more goes into
+    // Chrome's wedged queue.
+    if (useBackup()) {
+      waiting = null;
+      if (queue) backupEnqueue({ text: line, o });
+      else backupFresh({ text: line, o }, true);
+      return true;
+    }
     try {
       const u = make(line);
       u.rate = o.rate ?? SPEECH_RATE;
@@ -162,13 +298,16 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
       u.lang = match?.lang || lang;
       if (match) u.voice = match;
       const onStart = o.onStart;
-      u.onstart = () => { started(); onStart?.(); };
+      // A wedged line starting late while the backup had the voice: it was
+      // already said — stop it, and Chrome is back.
+      u.onstart = () => { if (useBackup()) { recover(); return; } started(); onStart?.(); };
       waiting = null;
       // Never over itself; but only cancel what is really playing (a cancel with
       // nothing playing, mid voice-load, can wedge Chrome's speech engine).
       if (!queue && busySynth()) synth.cancel();
       // A queued sentence waits behind the one before it; only a fresh line is timed.
       if (!queue) watchStart();
+      if (queue) pendingLines.push({ text: line, o }); else pendingLines = [{ text: line, o }];
       synth.speak(u);
       return true;
     } catch { unwatch(); return false; }
@@ -194,7 +333,12 @@ export function createSpeaker(opts: SpeakerOptions = {}): Speaker {
     speak: (text, o) => speak(text, o),
     enqueue: (text, o) => speak(text, o, true),
     voicesReady: () => raw().length > 0,
-    stop() { waiting = null; unwatch(); try { if (busySynth()) synth?.cancel(); } catch { /* nothing playing */ } },
+    stop() {
+      waiting = null; unwatch(); pendingLines = [];
+      try { if (busySynth()) synth?.cancel(); } catch { /* nothing playing */ }
+      clearFifo();
+      if (backup && (stuck || backupOn)) { try { backup.stop(); } catch { /* gone */ } }
+    },
     stuck: () => stuck,
   };
 }

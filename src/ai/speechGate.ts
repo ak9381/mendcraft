@@ -9,10 +9,10 @@
 // The gate wraps the read-aloud lines, so callers keep calling line() /
 // sentence(); nothing else changes.
 import type { ReadAloud } from './readAloud';
-import { VOICE_STUCK_LINE } from './speaker';
+import { VOICE_BACKUP_LINE, VOICE_STUCK_LINE } from './speaker';
 
 export const SOUND_OFF_CHIP = 'Sound is off. Click once.';
-export { VOICE_STUCK_LINE };
+export { VOICE_BACKUP_LINE, VOICE_STUCK_LINE };
 
 export interface SpeechGateDeps {
   /** True once the page has had a real click / key (missing API → true). */
@@ -31,6 +31,8 @@ export interface SpeechGateDeps {
 export interface SpeechGate extends ReadAloud {
   /** speaker.ts onStuck. */
   setStuck(stuck: boolean): void;
+  /** speaker.ts onBackup: the Mac's voice speaks for a stuck Chrome. */
+  setBackup(on: boolean): void;
   /** The line waiting for her click, if any. */
   held(): string | null;
   /** The chip on screen now (null = none). */
@@ -40,11 +42,12 @@ export interface SpeechGate extends ReadAloud {
 export function createSpeechGate(inner: ReadAloud, d: SpeechGateDeps): SpeechGate {
   let held: string | null = null;
   let stuck = false;
+  let backup = false;
   let blockedLogged = false;
   let waitingGesture = false;
   let chip: string | null = null;
   const render = (): void => {
-    const next = stuck ? VOICE_STUCK_LINE : held !== null ? SOUND_OFF_CHIP : null;
+    const next = stuck ? (backup ? VOICE_BACKUP_LINE : VOICE_STUCK_LINE) : held !== null ? SOUND_OFF_CHIP : null;
     if (next === chip) return;
     chip = next;
     d.chip(next);
@@ -90,6 +93,12 @@ export function createSpeechGate(inner: ReadAloud, d: SpeechGateDeps): SpeechGat
       if (s === stuck) return;
       stuck = s;
       d.log?.(s ? 'speech: stuck in Chrome (a line did not start in 3 s) — relaunch Chrome' : 'speech: voice is back');
+      render();
+    },
+    setBackup(on) {
+      if (on === backup) return;
+      backup = on;
+      d.log?.(on ? "speech: Chrome's voice is stuck — the Mac's voice speaks instead" : "speech: the Mac's voice stopped");
       render();
     },
     held: () => held,

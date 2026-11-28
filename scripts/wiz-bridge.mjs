@@ -17,6 +17,7 @@
 import { createServer } from 'node:http';
 import dgram from 'node:dgram';
 import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { isAllowedOrigin, isIPv4, validateParams } from './wizBridge.lib.mjs';
 
 const WIZ_PORT = 38899;
@@ -152,6 +153,9 @@ function readJson(req) {
   });
 }
 
+let sayProc = null;
+function stopSay() { if (sayProc) { try { sayProc.kill(); } catch { /* gone */ } sayProc = null; } }
+
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
   if (req.method === 'OPTIONS') return send(res, origin, 204, {}); // preflight: no token on this leg
@@ -182,6 +186,24 @@ const server = createServer(async (req, res) => {
       if (!checked.ok) return send(res, origin, 400, { error: checked.error, refused: true });
       return send(res, origin, 200, { result: await request(ip, { method: 'setPilot', params: checked.params }) });
     }
+    // Backup voice: macOS `say` speaks a reply when Chrome's own speech
+    // engine has wedged (it can, browser-wide). Text only, capped; the voice
+    // name is checked; one line at a time (a new one stops the last).
+    if (req.method === 'POST' && url.pathname === '/say') {
+      const body = await readJson(req);
+      const text = typeof body.text === 'string' ? body.text.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 600) : '';
+      if (!text) return send(res, origin, 400, { error: 'no text' });
+      const voice = typeof body.voice === 'string' && /^[\w ().'-]{1,40}$/.test(body.voice) ? body.voice : null;
+      const rate = Number.isFinite(body.rate) ? Math.max(120, Math.min(260, Math.round(body.rate))) : null;
+      stopSay();
+      sayProc = spawn('say', [...(voice ? ['-v', voice] : []), ...(rate ? ['-r', String(rate)] : []), '--', text], { stdio: 'ignore' });
+      sayProc.on('exit', () => { sayProc = null; });
+      return send(res, origin, 200, { ok: true });
+    }
+    if (req.method === 'POST' && url.pathname === '/say/stop') {
+      stopSay();
+      return send(res, origin, 200, { ok: true });
+    }
     send(res, origin, 404, { error: 'not found' });
   } catch (err) {
     send(res, origin, 502, { error: String(err?.message || err) });
@@ -197,7 +219,7 @@ udp.bind(() => {
     if (args.bulb) console.log(`[wiz-bridge] default bulb: ${args.bulb}`);
     console.log(`[wiz-bridge] token: ${TOKEN}`);
     console.log(`[wiz-bridge] open the app with ?wizToken=${TOKEN} once, or set localStorage['mendcraft.wizToken'].`);
-    console.log('[wiz-bridge] GET /health  GET /discover  POST /getPilot  POST /setPilot  (all require header x-wiz-token)');
+    console.log('[wiz-bridge] GET /health  GET /discover  POST /getPilot  POST /setPilot  POST /say  POST /say/stop  (all require header x-wiz-token)');
   });
 });
 
