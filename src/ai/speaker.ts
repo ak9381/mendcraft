@@ -89,7 +89,7 @@ function browserUtterance(text: string): UtteranceLike {
 export const VOICES_WAIT_MS = 3000;
 /** A line that has not started this long after speak() on a page she has
  *  clicked: Chrome's speech is stuck. The queue is cancelled. */
-export const STUCK_MS = 3000;
+export const STUCK_MS = 8000;
 export const VOICE_STUCK_LINE = 'Voice is stuck in Chrome — relaunch Chrome to hear replies';
 
 function pageActivated(): boolean {
