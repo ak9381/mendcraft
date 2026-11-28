@@ -60,6 +60,23 @@ describe('routeLine: the table run() switches on', () => {
     ['connect the speaker', 'connectByName'],
     ['what is the weather like', 'openEnded'],
     ['send it to my phone', 'openEnded'],
+    // Voice send / bring back (canvas commands, after the device routes).
+    ['send the board to the iphone', 'canvas'],
+    ['Send this board to the Nothing phone.', 'canvas'],
+    ['move the dashboard to the left phone', 'canvas'],
+    ['put it on the iphone', 'canvas'],
+    ['push my status board to the nothing phone', 'canvas'],
+    ['send the board to the phone', 'canvas'],
+    ['bring the board back', 'canvas'],
+    ['get it back from the iphone', 'canvas'],
+    // The demo's fixed phrases keep their routes.
+    ['move the lamp to the left', 'openEnded'],
+    ['move it to the right', 'openEnded'],
+    ['build the dashboard', 'connectRoom'],
+    ['show my devices', 'showDevices'],
+    ['turn on the lamp', 'device'],
+    ['play music', 'device'],
+    ['follow me', 'gimbal'],
   ];
   it.each(table)('%s → %s', (text, name, w) => {
     expect(routeLine(text, { ...base, ...w }).name).toBe(name);

@@ -104,6 +104,43 @@ describe('send is a move, with a way back', () => {
   }, 60000);
 });
 
+describe('voice send', () => {
+  it('"send the board to the …" sends the focused board at once (stamped, pinned, moved)', async () => {
+    const h = await laptop();
+    const target = h.edgeLayout().right as 'ios' | 'android';
+    const mark = h.statusMark();
+    h.run(`send the board to the ${target === 'ios' ? 'iphone' : 'nothing phone'}`);
+    expect(h.frames().find((f) => f.id === 'f1')?.away).toBe(target);
+    const snap = (window as Win).__mcLastBoardSnapshot! as Win['__mcLastBoardSnapshot'] & { boardSend?: { id: string } };
+    expect(snap.boardFor).toBe(target);
+    expect(snap.pins?.[target]).toBe('f1');
+    expect(typeof snap.boardSend?.id).toBe('string');
+    expect(h.statusSince(mark)).toContain(`Sent to the ${PHONE_NAME[target]} (SIM).`);
+    expect(h.sharedBoards().has('f1')).toBe(true);
+  }, 45000);
+  it('"send it to the phone" with two phones paired asks which; a side works too', async () => {
+    const h = await laptop();
+    const mark = h.statusMark();
+    h.run('send the board to the phone');
+    expect(h.statusSince(mark)).toContain('Which phone — the Nothing phone or the iPhone?');
+    expect(h.frames().some((f) => f.away)).toBe(false);
+    const left = h.edgeLayout().left as 'ios' | 'android';
+    h.run('move it to the left phone');
+    expect(h.frames().find((f) => f.id === 'f1')?.away).toBe(left);
+  }, 45000);
+});
+
+describe('parseCanvasCommand: send', () => {
+  it('parses the send phrases; "send it to my phone" stays talk', () => {
+    expect(parseCanvasCommand('send the board to the iPhone')).toEqual({ type: 'sendBoard', to: 'ios' });
+    expect(parseCanvasCommand('put my dashboard onto the Nothing phone')).toEqual({ type: 'sendBoard', to: 'android' });
+    expect(parseCanvasCommand('throw it to the right phone')).toEqual({ type: 'sendBoard', to: 'right' });
+    expect(parseCanvasCommand('send the board to the phone')).toEqual({ type: 'sendBoard', to: 'phone' });
+    expect(parseCanvasCommand('send it to my phone')).toBeNull();
+    expect(parseCanvasCommand('move it to the right')).toBeNull();
+  });
+});
+
 describe('parseCanvasCommand: bring back', () => {
   it('parses the bring-back phrases, never "pin"', () => {
     expect(parseCanvasCommand('bring the board back')).toEqual({ type: 'bringBack' });

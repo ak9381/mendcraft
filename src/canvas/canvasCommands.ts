@@ -15,7 +15,10 @@ export type CanvasCommand =
   | { type: 'drop' }
   | { type: 'undo' }
   /** "bring the board back (from the iPhone)": a board sent to a phone comes back. */
-  | { type: 'bringBack'; from?: 'ios' | 'android' };
+  | { type: 'bringBack'; from?: 'ios' | 'android' }
+  /** "send the board to the Nothing phone": the focused board goes to that
+   *  phone, as an edge hold would ('phone' = which one was not said). */
+  | { type: 'sendBoard'; to: 'ios' | 'android' | 'left' | 'right' | 'phone' };
 
 /** A spoken phone name → its platform ("the nothing phone", "my iphone"). */
 export function phoneFromWords(w: string): 'ios' | 'android' | null {
@@ -49,6 +52,14 @@ export function parseCanvasCommand(text: string): CanvasCommand | null {
   if (/^(yes )?keep( (it|this|that|them))?$/.test(t)) return { type: 'keep' };
   if (/^((no )?drop( (it|this|that))?|reject( (it|this|that))?)$/.test(t)) return { type: 'drop' };
   if (/^undo( (it|this|that))?$/.test(t)) return { type: 'undo' };
+  const send = /^(send|move|put|push|throw) (?:(this|the|that|my) )?(status )?(board|dashboard|it) (to|on|onto) (the |my )?(nothing( phone)?|android( phone)?|iphone|left phone|right phone|phone)$/.exec(t);
+  if (send) {
+    const w = send[7]!;
+    // "send it to my phone" stays talk (it names no board and no phone).
+    if (w === 'phone' && send[4] === 'it') return null;
+    const to = /^(nothing|android)/.test(w) ? 'android' : w === 'iphone' ? 'ios' : w.startsWith('left') ? 'left' : w.startsWith('right') ? 'right' : 'phone';
+    return { type: 'sendBoard', to };
+  }
   // Not "pin"/"unpin" (those dock a board to the side).
   const back = /^(bring|get|take) (the |my |that )?(status )?(board|dashboard|it) back( (from|to) (.*))?$/.exec(t);
   if (back) {

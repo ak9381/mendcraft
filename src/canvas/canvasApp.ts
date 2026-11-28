@@ -1068,6 +1068,34 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     say(`Brought ${f.title} back from the ${PHONE_NAME[from]}.`);
     return true;
   }
+  /** Which side `to` means now: a platform → its side; a side → itself;
+   *  'phone' → the only paired one. Not paired: the line that says so. */
+  function sendSide(to: PhonePlatform | 'left' | 'right' | 'phone'): { side: 'left' | 'right' } | { why: string } {
+    const layout = edgeLayout();
+    if (to === 'left' || to === 'right') return layout[to] ? { side: to } : { why: `No phone is paired on the ${to}.` };
+    if (to === 'phone') {
+      if (layout.left && layout.right) return { why: 'Which phone — the Nothing phone or the iPhone?' };
+      if (layout.left) return { side: 'left' };
+      if (layout.right) return { side: 'right' };
+      return { why: 'No phone is paired.' };
+    }
+    if (layout.left === to) return { side: 'left' };
+    if (layout.right === to) return { side: 'right' };
+    return { why: `The ${PHONE_NAME[to]} isn't paired.` };
+  }
+  /** "send the board to the Nothing phone": the focused board goes there at
+   *  once (no hold), through the same send as the edge drag. */
+  function sendBoardByVoice(to: PhonePlatform | 'left' | 'right' | 'phone'): boolean {
+    const id = focusId ?? lastFocus;
+    const board = id ? surfaces[id] : undefined;
+    if (!id || !board || reg.get(id)?.away) { say('Open a board first, then send it.'); return false; }
+    const r = sendSide(to);
+    if ('why' in r) { say(r.why); return false; }
+    const target = edgeLayout()[r.side]!;
+    const ok = commitBoardSend(id, board, target);
+    if (ok) sentOtherwise.add(id);
+    return ok;
+  }
   /** "bring it back (from the iPhone)": the board on that phone, else the
    *  one sent last. */
   function bringBackByVoice(from?: PhonePlatform): void {
@@ -6414,6 +6442,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
           }
           case 'pin': { const id = focusId ?? lastFocus; if (id) { reg.setPinned(id, c.on); sync(); updateDock(); persist(); say(c.on ? 'Pinned. It docks beside the next board.' : 'Unpinned.'); } break; }
           case 'bringBack': if (phoneShell) say('Bring a board back on the laptop.'); else bringBackByVoice(c.from); break;
+          case 'sendBoard': if (phoneShell) say('Send a board from the laptop.'); else sendBoardByVoice(c.to); break;
           case 'buildNext': {
             const cur = focusId ?? lastFocus;
             if (cur && surfaces[cur]) reg.setPinned(cur, true);
