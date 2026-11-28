@@ -5899,7 +5899,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       case 'connectRoom': {
         // "add the gimbal" with the iPhone paired: two questions first (is it
         // on, is the iPhone on it); the second yes is checked against the stand.
-        if (isAddGimbalAsk(text) && iphonePaired()) { gimbalAsk.start(text); return true; }
+        if (isAddGimbalAsk(text) && iphonePaired()) { gimbalAsk.start('add the gimbal'); return true; } // speech often hears 'gymbo': the board turn gets the clean ask
         connectRoomOnDashboard(text); return true;
       }
       // "floor plan for Mrs Sharma's flat" / "a floor plan" / "floorplan" —
