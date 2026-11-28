@@ -68,6 +68,8 @@ export interface PairFirst {
   continueNext(): boolean;
   /** Returns true when the utterance belonged to this flow. */
   handleSpeech(text: string): boolean;
+  /** Pure peek: would handleSpeech(text) consume this line right now? */
+  claims(text: string): boolean;
   /** Leave the pair-first flow without dropping phones (new board, undo, unrelated command). */
   abandon(): void;
   /** Full reset: phones gone, timers cleared (Disconnect, card closed, destroy). */
@@ -172,6 +174,11 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
       changed();
     },
     continueNext,
+    claims(text) {
+      if (phase !== 'pairing' && phase !== 'asking') return false;
+      if (isBuildDashboard(text) && !wantsStatusBoard(text)) return true;
+      return phase === 'pairing' && isContinue(text) && list.length > 0;
+    },
     handleSpeech(text) {
       if (phase !== 'pairing' && phase !== 'asking') return false;
       // "a dashboard to keep track of my devices' status" is the status board: not this.

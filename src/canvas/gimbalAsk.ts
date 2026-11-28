@@ -26,6 +26,8 @@ export interface GimbalAsk {
   start(text: string): void;
   /** True when the line was an answer to the open question. */
   handle(text: string): boolean;
+  /** Pure peek: would handle(text) take this line? (yes, wait, no / cancel) */
+  claims(text: string): boolean;
   active(): boolean;
   cancel(): void;
 }
@@ -36,6 +38,7 @@ export function createGimbalAsk(d: GimbalAskDeps): GimbalAsk {
   return {
     start(text) { original = text; step = 'on'; d.say(GIMBAL_ASK_ON); d.show?.(GIMBAL_ASK_ON); },
     active: () => step !== null,
+    claims: (text) => step !== null && (NO_RE.test(text) || WAIT_RE.test(text) || YES_RE.test(text)),
     cancel() { step = null; d.show?.(null); },
     handle(text) {
       if (!step) return false;

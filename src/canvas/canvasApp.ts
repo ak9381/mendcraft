@@ -31,7 +31,7 @@ import { cleanReply, createSentenceFeed } from './liveReply';
 import { replyTrace } from '../ai/replyTrace';
 import { breakEngine, breakPrompt, impossibleAttempt, runBreakTurn, type Attempt } from './tryToBreak';
 import { createPairFirst, DISCONNECT_ARM_MS, pairedRowHtml } from './pairedRow';
-import { createGimbalAsk } from './gimbalAsk';
+import { createGimbalAsk, GIMBAL_ASK_CANCEL } from './gimbalAsk';
 import { mountAskCard } from './askCard';
 import { askFirst, askLine, choicesFor, choicesSpoken, CHOICES_LINE, isCommand, pickChoice, SAY_AGAIN_LINE, SOMETHING_ELSE, decideIntent, INTENT_CONSTRAINT, INTENT_WAIT_MS, INTENT_WORKING_LINE, intentPrompt, parseIntent, understoodLine, type IntentAction } from './intentRouter';
 import { pointPhotoCaption, showPointPhoto } from './pointPhotoCard';
@@ -149,6 +149,7 @@ import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withCo
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
 import { createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, type Turn } from './turns';
+import { answersPrompt, CANCEL_RE, CANCELLED_LINE, createConversation, MODAL_PRIORITY } from './conversation';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
 import { identifyDevice, onNanoBusyHandoff, TEXT_REPLY_SUFFIX, type VisionTrace } from '../ai/hybrid';
@@ -1271,8 +1272,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     if (doneTimer) clearTimeout(doneTimer);
     doneTimer = setTimeout(() => {
       doneTimer = null;
-      const waiting = turnBusy || intentBusy || streamsOut > 0 || reviewBusy() || gimbalAsk.active() || !!intentAsk
-        || !!intentChoices || !!pointWait || !!iphonePoint || pairFirst.phase() === 'pairing' || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
+      const waiting = turnBusy || intentBusy || streamsOut > 0 || conversation.busy()
+        || !!pointWait || !!iphonePoint || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
       if (waiting) { scheduleDoneCue(); return; }
       say(DONE_CUE, { speak: true });
     }, 2500);
@@ -5885,7 +5886,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       ]);
     } catch { full = ''; } finally { if (timer) clearTimeout(timer); clearTimeout(still); t.signal.removeEventListener('abort', onStale); intentBusy = false; }
     // She moved on (another line, a question card, a review): this answer is stale.
-    if (!t.live() || gimbalAsk.active() || intentAsk || intentChoices || reviewBusy()) { panel.log('done', 'answer dropped: you had moved on'); return; }
+    if (!t.live() || conversation.busy({ blockingOnly: true })) { panel.log('done', 'answer dropped: you had moved on'); return; }
     const pick = parseIntent(full);
     const d = askFirst(decideIntent(pick), text);
     const conf = `${pick ? ` (${Math.round(pick.confidence * 100)}%` : ' ('}${pick ? ', ' : ''}${((Date.now() - t0) / 1000).toFixed(1)} s)`;
@@ -5924,6 +5925,78 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     proceed: () => { gimbalConnected = true; rowChanged(); gimbalMode('face'); },
     show: (q) => { if (q) askCard?.show(q); else askCard?.hide(); },
   });
+  // ---- who owns her next line (conversation.ts) ----
+  const YES_LINE_RE = /^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i;
+  const NO_LINE_RE = /^\s*(?:no|nope|nah|wrong)\b/i;
+  const conversation = createConversation({
+    say: (line) => say(line, { speak: true }),
+    log: (line) => aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: line }),
+  });
+  conversation.register({
+    id: 'review', kind: 'blocking', priority: MODAL_PRIORITY.review, listens: false,
+    active: () => reviewBusy(), claim: () => 'pass', prompt: () => '', cancel: () => undefined,
+  });
+  conversation.register({
+    id: 'intentChoices', kind: 'blocking', priority: MODAL_PRIORITY.intentChoices,
+    active: () => !!intentChoices,
+    claim: (h) => {
+      const c = intentChoices; if (!c || CANCEL_RE.test(h.text)) return 'reprompt';
+      const i = pickChoice(h.text, c.cs);
+      if (i === null) return 'reprompt';
+      pickIntentChoice(i); return 'answered';
+    },
+    prompt: () => `Pick one: ${(intentChoices?.cs ?? []).map((c) => c.label).join(', ')}, something else, or say cancel.`,
+    cancel: () => { intentChoices = null; askCard?.hide(); return CANCELLED_LINE; },
+  });
+  conversation.register({
+    id: 'intentAsk', kind: 'blocking', priority: MODAL_PRIORITY.intentAsk,
+    active: () => !!intentAsk,
+    claim: (h) => {
+      if (YES_LINE_RE.test(h.text)) { answerIntent('yes'); return 'answered'; }
+      if (NO_LINE_RE.test(h.text)) { answerIntent('no'); return 'answered'; }
+      return 'reprompt';
+    },
+    prompt: () => answersPrompt(['yes', 'no']),
+    cancel: () => { intentAsk = null; askCard?.hide(); return CANCELLED_LINE; },
+  });
+  conversation.register({
+    id: 'gimbalAsk', kind: 'blocking', priority: MODAL_PRIORITY.gimbalAsk,
+    active: () => gimbalAsk.active(),
+    // "no" / "cancel" / "stop" are its own answers (it says why it stopped).
+    claim: (h) => (gimbalAsk.handle(h.text) ? 'answered' : 'reprompt'),
+    prompt: () => answersPrompt(['yes', 'no']),
+    cancel: () => { gimbalAsk.cancel(); return GIMBAL_ASK_CANCEL; },
+  });
+  conversation.register({
+    // Open card: asking / working take every line ("undo" / "cancel" are its
+    // own); a finished card closes on the next line and lets it run.
+    id: 'morph', kind: 'soft', priority: MODAL_PRIORITY.morph,
+    active: () => !!morphFlow?.isOpen(),
+    waits: () => !!morphFlow?.isOpen() && morphFlow.claimsSpeech(''),
+    claim: (h) => (morphFlow?.handleSpeech(h.text) ? 'answered' : 'pass'),
+    prompt: () => '', cancel: () => { morphFlow?.handleSpeech('cancel'); return 'Cancelled. Nothing changed.'; },
+  });
+  conversation.register({
+    // Pair-first: "next" / "build the dashboard" belong to it; while asking,
+    // point / name / connect stay in the flow and anything else leaves it.
+    id: 'pairFirst', kind: 'soft', priority: MODAL_PRIORITY.pairFirst, endLine: 'Left pairing.',
+    active: () => pairFirst.phase() === 'pairing' || pairFirst.phase() === 'asking',
+    claim: (h) => {
+      const was = pairFirst.phase();
+      if (pairFirst.handleSpeech(h.text)) return 'answered';
+      return was === 'asking' && pairFirst.phase() !== 'asking' ? 'end-and-pass' : 'pass';
+    },
+    prompt: () => '', cancel: () => { pairFirst.abandon(); return 'Left pairing. Your phones stay connected.'; },
+  });
+  conversation.register({
+    // "Lamp 1 or Lamp 2?" after a point: her answer picks the device; any
+    // other line drops the question (what already left is booked) and runs.
+    id: 'pointChoice', kind: 'soft', priority: MODAL_PRIORITY.pointChoice,
+    active: () => !!pointChoice,
+    claim: (h) => (CANCEL_RE.test(h.text) ? 'pass' : handlePointChoice(h.text) ? 'answered' : 'pass'),
+    prompt: () => '',
+    cancel: () => { const pc = takePointChoice(); if (pc) ledgerPointFailure(pc.r, pc.o, null); return 'Okay, I won’t connect it.'; },
+  });
   function run(text: string): boolean {
     // New input: whatever was still being read aloud stops now.
     speaker.stop();
@@ -5941,30 +6014,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     const heard = hear(text);
     if (heard.fixes.length) { if (heardRaw.size > 50) heardRaw.clear(); heardRaw.set(heard.text, heard.raw); }
     text = heard.text;
-    // Morph-first: while the morph card is open, speech (and the say box)
-    // means "edit this tile"; "undo" / "cancel" are meta-commands handled
-    // locally and never reach a model.
-    // "Did you mean: A, B, C or something else?": her pick answers it.
-    if (intentChoices) {
-      const i = pickChoice(text, intentChoices.cs);
-      if (i !== null) { pickIntentChoice(i); return true; }
-      say(`Pick one: ${intentChoices.cs.map((c) => c.label).join(', ')}, or say something else.`, { speak: true }); return true;
-    }
-    // "Did you mean …?": her yes / no answers it; nothing else runs meanwhile.
-    if (intentAsk) {
-      if (/^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|right|correct)\b/i.test(text)) { answerIntent('yes'); return true; }
-      if (/^\s*(?:no|nope|nah|cancel|never\s*mind|wrong)\b/i.test(text)) { answerIntent('no'); return true; }
-      say('Answer the question first: yes or no.', { speak: true }); return true;
-    }
-    if (morphFlow?.handleSpeech(text)) return true;
-    // Pair-first flow: "next" / "build the dashboard" belong to it while it runs.
-    if (pairFirst.handleSpeech(text)) return true;
-    // "Is the gimbal switched on?" / "Put the iPhone on the gimbal": her yes answers it.
-    if (gimbalAsk.handle(text)) return true;
-    // The question card is modal: nothing else runs until it is answered.
-    if (gimbalAsk.active()) { say('Answer the question first: yes or no.', { speak: true }); return true; }
-    // "Lamp 1 or Lamp 2?" after a point: her answer picks the device.
-    if (handlePointChoice(text)) return true;
+    // Whatever waits for her answer gets the line first (conversation.ts):
+    // the review, "Did you mean…", the gimbal questions, the morph card,
+    // pair-first, "Lamp 1 or Lamp 2?" — in that order, one claimant.
+    if (conversation.handle(heard).claimed) return true;
     // CAD extras go to the focused plan board (else any plan board); with no
     // plan board the line falls through to the normal routes.
     const planBoard = routePlanBoard();
