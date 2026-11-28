@@ -148,7 +148,7 @@ import { ghostLeaves, ghostWords } from './ghostWords';
 import { devicesPlanFromNano, NANO_DEVICES_CONSTRAINT, nanoDevicesPrompt, withConnectAnother, onlyConnectedTiles } from './devicesTurn';
 import { fixBoard, isAddGimbalAsk, routeLine, type RouteWorld } from './routeLine';
 import { hear } from './hearing';
-import { createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, type Turn } from './turns';
+import { cantDoYetLine, createTurns, INTENT_STILL_LINE, INTENT_STILL_MS, watchdogOutcome, type Outcome, type OutcomeKind, type Turn } from './turns';
 import { answersPrompt, CANCEL_RE, CANCELLED_LINE, createConversation, MODAL_PRIORITY } from './conversation';
 import { NO_MODEL_LINE, replayRouteIn, type TurnKind } from './replayEngine';
 import { droppedLogLine, droppedSayLine } from './canvasPersistence';
@@ -1258,11 +1258,22 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   // a review's title, a command's result or refusal, a pairing outcome.
   // Hints, HUDs and "Listening…" are written, never read.
   const readAloudLines = createReadAloud({ speaker, enabled: () => readAloud, packLang: () => pack?.lang });
-  /** `speak`: true reads this line aloud; a string reads that instead. */
-  type SayOptions = { speak?: boolean | string };
-  /** "Done. Say something else.": once a turn has really finished and
-   *  nothing waits on her (no review, question, point, pairing, model or mic). */
-  const DONE_CUE = 'Done. Say something else.';
+  /** `speak`: true reads this line aloud; a string reads that instead.
+   *  `outcome`: this line closes her turn (turns.ts) and is marked ✓ ? ✕. */
+  type SayOptions = { speak?: boolean | string; outcome?: OutcomeKind };
+  /** One turn per line (turns.ts): a newer line aborts it, so a late Nano or
+   *  chat answer for an older line says and does nothing. */
+  const turns = createTurns();
+  let turn: Turn = turns.begin('');
+  /** The last root turn the watchdog spoke for (it speaks once per turn). */
+  let cuedTurn = 0;
+  /** Lines that never count as "something was said" for the turn. */
+  const quietLine = (t: string): boolean => !t || t === LISTENING_STATUS || t === INTENT_WORKING_LINE || t === INTENT_STILL_LINE;
+  /** Close a turn (first wins) and mark the status line with how it ended. */
+  function settleTurn(t: Turn, o: Outcome): void {
+    if (!t.settle(o)) return;
+    aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: `outcome ${o.kind}${o.reason ? ` (${o.reason})` : ''} ${((Date.now() - t.startedAt) / 1000).toFixed(1)} s` });
+  }
   const SPEECH_NEEDS_CLICK = 'Click anywhere once to turn on spoken replies.';
   let speechHintSaid = false;
   let doneTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1275,11 +1286,20 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       const waiting = turnBusy || intentBusy || streamsOut > 0 || conversation.busy()
         || !!pointWait || !!iphonePoint || !!micFabRef?.listening || (askCard?.isOpen() ?? false);
       if (waiting) { scheduleDoneCue(); return; }
-      say(DONE_CUE, { speak: true });
+      // The watchdog: once everything is idle, a turn nobody closed says how
+      // it ended — "Done: <route>." or, when nothing ran, "say it another way".
+      const t = turn;
+      if (!t.live() || cuedTurn === t.id) return;
+      const w = watchdogOutcome(t);
+      if (!w) return;
+      cuedTurn = t.id;
+      say(w.line, { speak: true, outcome: w.kind });
     }, 2500);
   }
   const say = (t: string, o: SayOptions = {}) => {
     statusEl.textContent = t; hideRetry();
+    if (o.outcome) { statusEl.dataset.outcome = o.outcome; settleTurn(turn, { kind: o.outcome, line: t }); } else delete statusEl.dataset.outcome;
+    if (!quietLine(t) && !o.outcome) turn.noteSaid();
     showPhoneSay(t === LISTENING_STATUS ? '' : t);
     // The mic opening is new input from her: stop talking.
     if (t === LISTENING_STATUS) readAloudLines.stop();
@@ -1294,7 +1314,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       speechHintSaid = true;
       setTimeout(() => { statusEl.textContent = SPEECH_NEEDS_CLICK; fadeStatus(SPEECH_NEEDS_CLICK); }, 1800);
     }
-    if (t && t !== DONE_CUE && t !== LISTENING_STATUS && !phoneShell) scheduleDoneCue();
+    if (t && cuedTurn !== turn.id && t !== LISTENING_STATUS && !phoneShell) scheduleDoneCue();
     if (t && FAILURE_LINE.test(t) && !/^Dropped\./.test(t)) activityLog.push({ kind: 'note', text: t });
   };
 
@@ -5636,7 +5656,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   async function openEndedTurn(text: string): Promise<void> {
     // Chat answers what she said, not the fixed-up line routing read.
     text = heardRaw.get(text) ?? text;
-    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.'); return; }
+    if (reviewBusy()) { say('Finish the waiting proposal first: keep or drop.', { outcome: 'refused' }); return; }
     const nano = engineFor('nano', 'ask');
     const gemini = engineFor('gemini', 'ask');
     if (!nano || !gemini) { noModel(nano ? 'gemini' : 'nano'); return; }
@@ -5681,7 +5701,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (!t.live()) { aiFeed.publish({ kind: 'log', engine: 'rules', verb: 'note', text: 'dropped: stale' }); settleEngines(); autoHideAi(); return; }
       const why = `No answer. ${geminiFailLine(e)}`;
       panels.forEngine('gemini').fail(why);
-      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true });
+      aiPanel.querySelector('.mc-ai-state')!.textContent = why; say(why, { speak: true, outcome: 'refused' });
       settleEngines(); autoHideAi();
       return;
     }
@@ -5698,6 +5718,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // honest line then starts afresh and cuts it off.
     if (guarded.replaced && live.started()) liveSay().end(reply);
     else live.end(reply);
+    // A replaced reply (it promised what chat can't do) is a refusal.
+    if (!guarded.replaced) misses = 0;
+    settleTurn(t, guarded.replaced ? { kind: 'refused', line: reply, reason: 'promise guard' } : { kind: 'answered', line: reply });
+    statusEl.dataset.outcome = guarded.replaced ? 'refused' : 'answered';
     settleEngines();
     autoHideAi();
   }
@@ -5808,12 +5832,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   /** "Did you mean: A, B, C or something else?" waiting for her pick. */
   let intentChoices: { text: string; cs: IntentAction[] } | null = null;
   const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+  /** Commands in a row that nothing could place (a routed line resets it). */
+  let misses = 0;
   function offerChoices(text: string, pick: Parameters<typeof choicesFor>[0]): void {
     if (!askCard) { void openEndedTurn(text); return; }
+    // The second miss in a row: say what works instead of another card.
+    if (++misses >= 2) { misses = 0; say(cantDoYetLine(), { speak: true, outcome: 'refused' }); autoHideAi(); return; }
     const cs = choicesFor(pick);
     intentChoices = { text, cs };
     askCard.showChoices(CHOICES_LINE, cs.map((c) => cap(c.label)), SOMETHING_ELSE, (i) => pickIntentChoice(i));
-    say(choicesSpoken(cs), { speak: true });
+    say(choicesSpoken(cs), { speak: true, outcome: 'asked' });
     autoHideAi();
   }
   function pickIntentChoice(i: number): void {
@@ -5836,17 +5864,16 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const heardRaw = new Map<string, string>();
   /** A line the intent router re-ran: it never goes back to the router. */
   let routingIntent = false;
-  /** One turn per line (turns.ts): a newer line aborts it, so a late Nano or
-   *  chat answer for an older line says and does nothing. */
-  const turns = createTurns();
-  let turn: Turn = turns.begin('');
   function askAnswer(a: 'yes' | 'no'): void {
     if (gimbalAsk.active()) { gimbalAsk.handle(a); return; }
     if (intentAsk) answerIntent(a);
   }
   function runIntentPhrase(phrase: string): void {
+    // The phrase is a child of her line: it lives (and settles) with it.
+    const parent = turn;
     routingIntent = true;
-    try { run(phrase); } finally { routingIntent = false; }
+    turn = turns.begin(phrase, parent);
+    try { run(phrase); } finally { routingIntent = false; turn = parent; }
   }
   function answerIntent(a: 'yes' | 'no'): void {
     const q = intentAsk; if (!q || gimbalAsk.active()) return;
@@ -5901,7 +5928,7 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       panel.log('done', `not sure: ${d.action.label}?${conf}`);
       intentAsk = { action: d.action, text };
       askCard.show(askLine(d.action));
-      say(askLine(d.action), { speak: true });
+      say(askLine(d.action), { speak: true, outcome: 'asked' });
       autoHideAi();
       return;
     }
@@ -6017,12 +6044,19 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
     // Whatever waits for her answer gets the line first (conversation.ts):
     // the review, "Did you mean…", the gimbal questions, the morph card,
     // pair-first, "Lamp 1 or Lamp 2?" — in that order, one claimant.
-    if (conversation.handle(heard).claimed) return true;
+    const owned = conversation.handle(heard);
+    if (owned.claimed) {
+      misses = 0;
+      if (owned.claim === 'reprompt') settleTurn(turn, { kind: 'asked', line: statusEl.textContent ?? '', reason: `modal ${owned.by}` });
+      else if (!turn.route()) settleTurn(turn, { kind: 'answered', line: statusEl.textContent ?? '', reason: `modal ${owned.by}` });
+      return true;
+    }
     // CAD extras go to the focused plan board (else any plan board); with no
     // plan board the line falls through to the normal routes.
     const planBoard = routePlanBoard();
     const r = routeLine(text, routeWorld(planBoard));
     const ranOn = focusId;
+    if (r.name !== 'openEnded') { turn.ranRoute(r.name); misses = 0; }
     switch (r.name) {
       case 'paletteOpen': openTools(); return true;
       case 'paletteClose': closeTools(); return true;

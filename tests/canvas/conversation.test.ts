@@ -115,7 +115,7 @@ describe('conversation: one owner for her next line', () => {
   it('run() has no hand-typed modal chain left', () => {
     const src = readFileSync('src/canvas/canvasApp.ts', 'utf8');
     const body = src.slice(src.indexOf('function run(text: string): boolean {'), src.indexOf('// ---- input ----'));
-    expect(body).toContain('if (conversation.handle(heard).claimed) return true;');
+    expect(body).toContain('const owned = conversation.handle(heard);');
     expect(body).not.toMatch(/pairFirst\.handleSpeech|gimbalAsk\.handle|handlePointChoice\(|morphFlow\?\.handleSpeech|if \(intentChoices\)|if \(intentAsk\)/);
     expect(src).toContain('conversation.busy()');
     expect(src).toContain('conversation.busy({ blockingOnly: true })');

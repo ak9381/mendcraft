@@ -360,6 +360,11 @@
 .mc-canvas-status { margin: 0 4px; font-size: 17px; color: var(--text-dim); min-height: 1.3em; }
 .mc-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mc-status-row .mc-canvas-status { flex: 1 1 auto; min-width: 0; }
+/* How her turn ended (turns.ts outcome): ✓ done / answered, ? asked, ✕ refused. */
+.mc-canvas-status[data-outcome]:not(:empty)::before { display: inline-block; margin-right: 6px; font-weight: 700; }
+.mc-canvas-status:is([data-outcome="done"], [data-outcome="answered"]):not(:empty)::before { content: "\2713"; color: #3FB56B; }
+.mc-canvas-status[data-outcome="asked"]:not(:empty)::before { content: "?"; color: #E0A526; }
+.mc-canvas-status[data-outcome="refused"]:not(:empty)::before { content: "\2715"; color: #E5534B; }
 /* Tools closed (desktop): the status line is a dark centred toast that fades
    ~6 s after the last line (say() clears it), not a permanent full-width pill. */
 @media (min-width: 601px) {
