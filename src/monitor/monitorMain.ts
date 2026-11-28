@@ -823,14 +823,18 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       case 'snapshot': {
         // Joining mid-session: show the laptop's lines and states and set the
         // byte baseline, but replay no packets and count no turns.
-        clearLaptop();
+        // A snapshot from the session already followed live (it answers the
+        // hello sent on a tab switch, often after its first turn began) only
+        // redraws: the open turn and the counts stay, so that turn still counts.
+        const followed = liveSid === m.sid;
+        if (followed) { modelSeen.delete('laptop'); resetView('laptop'); } else clearLaptop();
         setLive('laptop');
         (['nano', 'gemini'] as const).forEach((e) => {
           const s = m.engines[e];
           s.lines.forEach((l) => { const [vb, t] = splitTab(l); onLog('laptop', e, vb, t, false); });
           if (s.state in STATE_TEXT) setState('laptop', e === 'gemini' ? views.laptop.cloud : views.laptop.device, s.state);
         });
-        ledger.baseline('laptop', m.total, m.simTotal ?? 0);
+        if (!followed) ledger.baseline('laptop', m.total, m.simTotal ?? 0);
         updateTotals();
         break;
       }
@@ -841,6 +845,8 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
   // Follow the newest tab: a different sender takes over only if its message
   // is not older than the current one. Any tab can win again later.
   let currentSid: string | null = null;
+  /** The laptop session whose live messages (not just its snapshot) are already applied. */
+  let liveSid: string | null = null;
   let currentT = 0;
   const hello = () => { try { channel?.postMessage({ v: 1, sid: 'monitor', t: Date.now(), kind: 'hello' }); } catch { /* best effort */ } };
 
@@ -878,6 +884,7 @@ export function mountMonitor(root: HTMLElement, channel: FeedChannel | null, opt
       live.setAttribute('data-live', 'true');
     }
     apply(m);
+    if (!isPhoneTagged(m) && m.kind !== 'snapshot') liveSid = m.sid;
   });
 
   updateTotals();

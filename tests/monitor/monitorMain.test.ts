@@ -408,6 +408,21 @@ describe('feed session handling', () => {
     expect(hellos).toHaveLength(1);
   });
 
+  it('a reloaded canvas whose first turn races the snapshot still counts the turn kept on device', () => {
+    const ch = bus();
+    const root = new FakeEl('main', doc);
+    const mon = mountMonitor(root as unknown as HTMLElement, ch.monitor, { keys: null });
+    const snap = (sid: string, t: number) => ({ v: 1, sid, t, kind: 'snapshot', total: 0,
+      engines: { nano: { state: 'working', lines: ['received\tName one warm colour'] }, gemini: { state: 'idle', lines: [] } } });
+    ch.toMonitor({ v: 1, sid: 'A', t: 1, kind: 'bytes', total: 0 });
+    // the canvas reloads (new sid B) and its first turn starts before the snapshot answers hello
+    ch.toMonitor({ v: 1, sid: 'B', t: 10, kind: 'bytes', total: 0 });
+    ch.toMonitor({ v: 1, sid: 'B', t: 11, kind: 'log', engine: 'nano', verb: 'received', text: 'Name one warm colour' });
+    ch.toMonitor(snap('B', 12));
+    ch.toMonitor({ v: 1, sid: 'B', t: 13, kind: 'log', engine: 'nano', verb: 'done', text: 'Goldenrod' });
+    expect(mon.ledger.keptTotal()).toBe(1);
+  });
+
   it('ignores a different sid whose message is older than the current tab', () => {
     const { ch, half } = setup({ withFeed: false });
     const m = (sid: string, t: number, text: string) => ({ v: 1, sid, t, kind: 'log', engine: 'nano', verb: 'note', text });
