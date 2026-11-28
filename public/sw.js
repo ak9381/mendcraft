@@ -40,8 +40,12 @@ function fetchWithin(input, init, ms) {
 }
 
 self.addEventListener('install', (event) => {
-  // Activate as soon as install finishes, so the newest SW controls pages without a double reload.
-  self.skipWaiting();
+  // No skipWaiting: a forced takeover waits for the old worker's in-flight
+  // work, and Chrome holds every new page load on this site until it is done
+  // (the AI monitor and pages opened after a deploy stalled 15 s+). The old
+  // worker is network-first, so pages stay fresh; this one takes over once
+  // every Mendcraft tab has closed. A first install still activates at once
+  // and claims the page (activate below).
   // Everything is fetched HERE, while no page waits on this worker: the
   // whole app for an offline reload, then the MediaPipe files so hands start
   // offline even if they were never turned on online. Best effort, each fetch
