@@ -11,6 +11,8 @@ describe('devices board ask', () => {
       'Build me a board to keep track of all my devices with their status, and to point and connect another if needed.',
       'make a board that shows the status of my connected devices',
       'I want to see them on this board',
+      'build me about to keep track of all my devices and their status and to point and connect another if needed',
+      'Build me a bored to keep track of my devices',
       'show my devices',
     ]) expect(routeLine(t, w).name, t).toBe('showDevices');
   });
