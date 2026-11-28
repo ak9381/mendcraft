@@ -1063,6 +1063,8 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   let gimbalWired = false;
   function simIphone(): boolean { return !!opts.sim && pairFirst.phones().some((p) => p.sim && isIphoneRow(p)); }
   function iphonePaired(): boolean { return !!hostSession && pairFirst.phones().some((p) => !p.sim && isIphoneRow(p)); }
+  let rowChanged: () => void = () => {};
+  let gimbalConnected = false;
   const pairFirst = createPairFirst({
     say: (t, o) => say(t, o),
     sim: () => simPhones,
@@ -1085,8 +1087,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
       if (focusId !== id) { sync(); void focus(id); }
       void connectRoom(id);
     },
-    onChange: () => {
-      const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }));
+    onChange: rowChanged = () => {
+      // "Connect the gimbal" confirmed (and the iPhone still reports the stand): its own chip.
+      const extras = gimbalConnected && standReported() ? ['Gimbal'] : [];
+      const html = pairedRowHtml(pairFirst.phones(), pairFirst.phase(), (p) => phoneSubState(phoneSense.get(p.id), { sim: p.sim, ios: isIphoneRow(p) }), extras);
       const rowWasHidden = pairedRow.hidden;
       pairedRow.hidden = !html || phoneShell;
       dockPairedRow();
@@ -5738,7 +5742,10 @@ export function mountCanvas(root: HTMLElement, opts: CanvasOptions = {}) {
   const gimbalAsk = createGimbalAsk({
     say: (line) => say(line, { speak: true }),
     standReported: () => standReported(),
-    proceed: (t) => connectRoomOnDashboard(t),
+    // Connecting is all it does: no board turn (the dashboard, with the
+    // gimbal and the lamp, waits for "build the dashboard"). The Connected
+    // row shows it.
+    proceed: () => { gimbalConnected = true; rowChanged(); },
     show: (q) => { if (q) askCard?.show(q); else askCard?.hide(); },
   });
   function run(text: string): boolean {

@@ -83,3 +83,13 @@ describe('gimbal ask phrases', () => {
     for (const t of ['connect the lamp', 'connect my iphone', 'follow me']) expect(isAddGimbalAsk(t), t).toBe(false);
   });
 });
+
+import { pairedRowHtml } from '../../src/canvas/pairedRow';
+describe('connected row extras', () => {
+  it('shows a Gimbal chip beside the phones', () => {
+    const phones = [{ id: 'a', label: 'iPhone', sim: false }] as never;
+    expect(pairedRowHtml(phones, 'pairing', undefined, ['Gimbal'])).toContain('✓</span> Gimbal');
+    expect(pairedRowHtml(phones, 'live', undefined, ['Gimbal'])).toContain('✓</span> Gimbal');
+    expect(pairedRowHtml(phones, 'live')).not.toContain('Gimbal');
+  });
+});

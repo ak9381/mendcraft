@@ -5,7 +5,7 @@
 
 export const GIMBAL_ASK_ON = 'Is the gimbal switched on?';
 export const GIMBAL_ASK_DOCK = 'Put the iPhone on the gimbal. Is it on?';
-export const GIMBAL_ASK_DOCKED = 'The iPhone is on the gimbal. Adding it.';
+export const GIMBAL_ASK_DOCKED = 'Gimbal connected. The iPhone is on it.';
 export const GIMBAL_ASK_NOT_DOCKED = 'I don’t see the iPhone on the gimbal yet. Is it docked now?';
 export const GIMBAL_ASK_WAIT = 'Okay. Say yes when it’s ready.';
 export const GIMBAL_ASK_CANCEL = 'Okay, I won’t add the gimbal.';

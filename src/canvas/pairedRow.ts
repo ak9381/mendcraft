@@ -189,7 +189,7 @@ export function createPairFirst(d: PairFirstDeps): PairFirst {
 /** Pure HTML for the connected-device row: a check per joined phone, SIM
  *  labelled, plus each phone's sub-state (`subOf`, e.g. the iPhone's
  *  "Gimbal tracking ready" / "Tracking you" — only from real status). */
-export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase, subOf?: (p: PairedPhone) => string): string {
+export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPhase, subOf?: (p: PairedPhone) => string, extras: readonly string[] = []): string {
   if (phase === 'idle') return '';
   const sub = (p: PairedPhone): string => {
     // The row's own SIM chip already says these phones are simulated: no second "SIM ·".
@@ -202,10 +202,12 @@ export function pairedRowHtml(phones: readonly PairedPhone[], phase: PairFirstPh
     const subs = phones.map((p) => { const t = sub(p); return t ? ` <span class="mc-paired-phone">${esc(p.label)}:${t}</span>` : ''; }).join('');
     // Disconnect leads the row: Continue (the last thing pressed) sat at its
     // END, so a second press or a repeated fist must not land on Disconnect.
-    return `<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button><span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'}<span class="mc-paired-connected"> connected</span></span>${sim}${subs}`;
+    const more = extras.map((x) => ` <span class="mc-paired-extra"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(x)}</span>`).join('');
+    return `<button type="button" class="mc-btn mc-paired-disconnect">Disconnect</button><span class="mc-paired-check" aria-hidden="true">✓</span> <span class="mc-paired-count">${n} phone${n === 1 ? '' : 's'}<span class="mc-paired-connected"> connected</span></span>${more}${sim}${subs}`;
   }
   const chips = phones.length
     ? phones.map((p) => `<span class="mc-paired-chip" data-phone="${esc(p.id)}"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(p.label)}${p.sim ? ' <span class="mc-chip">SIM</span>' : ''}${sub(p)}</span>`).join('')
+      + extras.map((x) => `<span class="mc-paired-chip mc-paired-extra"><span class="mc-paired-check" aria-hidden="true">✓</span> ${esc(x)}</span>`).join('')
     : '<span class="mc-paired-wait">Waiting for a phone…</span>';
   const cont = phase === 'pairing'
     ? `<button type="button" class="mc-btn primary mc-paired-continue"${phones.length ? '' : ' disabled'}>Continue</button>`
