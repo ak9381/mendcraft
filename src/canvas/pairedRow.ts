@@ -21,7 +21,10 @@ export const NEXT_PROMPT = 'What do you want to connect next? Point at it, name 
 
 /** "connect devices", "connect my devices and make a dashboard", "connect all devices". */
 export function parseConnectDevices(text: string): { dashboard: boolean } | null {
-  if (!/\bconnect\s+(?:(?:all|my|the|our)\s+)?devices?\b/i.test(text)) return null;
+  const devices = /\bconnect\s+(?:(?:all|my|the|our)\s+)?devices?\b/i.test(text);
+  // "connect iphone", "connect my android phone", "connect my phones": the same chime pairing.
+  const phone = /\bconnect\s+(?:(?:my|the|our|an?)\s+)?(?:iphones?|android(?:\s+phones?)?|phones?)\b/i.test(text);
+  if (!devices && !phone) return null;
   return { dashboard: /\b(?:make|build|create|set\s*up)\b[^.]*\bdashboard\b/i.test(text) };
 }
 

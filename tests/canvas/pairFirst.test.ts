@@ -26,6 +26,11 @@ describe('parsing', () => {
     expect(parseConnectDevices('connect devices and make a dashboard')).toEqual({ dashboard: true });
     expect(parseConnectDevices('connect my devices')).toEqual({ dashboard: false });
     expect(parseConnectDevices('connect everything in this room')).toBeNull();
+    // A phone by name starts the same chime pairing.
+    for (const t of ['connect iphone', 'connect my iPhone', 'connect the android phone', 'connect my phone', 'connect my phones', 'connect iphone and android phone', 'Connect my Android.'])
+      expect(parseConnectDevices(t)).toEqual({ dashboard: false });
+    expect(parseConnectDevices('connect the lamp')).toBeNull();
+    expect(parseConnectDevices('call my phone')).toBeNull();
     expect(isBuildDashboard('ok build the dashboard')).toBe(true);
     expect(isBuildDashboard('make a dashboard')).toBe(true);
   });
